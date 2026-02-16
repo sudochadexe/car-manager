@@ -32,8 +32,17 @@ export default function Home() {
   const [showAddForm, setShowAddForm] = useState(false);
   const [isDecoding, setIsDecoding] = useState(false);
   const [newVehicle, setNewVehicle] = useState({ stockNum: '', year: '', make: '', model: '', vin: '', location: 'Front Lot' });
+  const [searchQuery, setSearchQuery] = useState('');
 
-  const filteredVehicles = activeTab === 'all' ? vehicles : vehicles.filter(v => v.status === activeTab);
+  const filteredVehicles = vehicles.filter(v => {
+    const matchesTab = activeTab === 'all' || v.status === activeTab;
+    const matchesSearch = !searchQuery || 
+      v.stockNum.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      v.vin.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      v.make.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      v.model.toLowerCase().includes(searchQuery.toLowerCase());
+    return matchesTab && matchesSearch;
+  });
 
   const decodeVin = async () => {
     if (!newVehicle.vin || newVehicle.vin.length < 17) {
@@ -109,6 +118,16 @@ export default function Home() {
           <div style={{ fontSize: '20px', fontWeight: 'bold', color: '#ef4444' }}>{vehicles.filter(v => v.age > 7).length}</div>
           <div style={{ fontSize: '10px', color: '#9ca3af' }}>OVER 7 DAYS</div>
         </div>
+      </div>
+
+      {/* Search */}
+      <div style={{ padding: '0 12px 8px' }}>
+        <input 
+          placeholder="Search stock#, VIN, make, model..."
+          value={searchQuery}
+          onChange={e => setSearchQuery(e.target.value)}
+          style={{ width: '100%', backgroundColor: '#374151', border: '1px solid #4b5563', borderRadius: '8px', padding: '10px 12px', color: 'white', fontSize: '14px' }}
+        />
       </div>
 
       {/* Stage Filters */}
