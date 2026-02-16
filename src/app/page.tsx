@@ -61,7 +61,7 @@ const MAKES_MODELS: Record<string, string[]> = {
   'Other': ['Other']
 };
 
-const YEARS = Array.from({ length: 25 }, (_, i) => (2026 - i).toString());
+const YEARS = Array.from({ length: 40 }, (_, i) => (2026 - i).toString());
 const COMMON_MAKES = Object.keys(MAKES_MODELS);
 
 // Role-based stage access
@@ -115,6 +115,28 @@ export default function Home() {
     return '📌';
   };
 
+  // Decode model year from VIN 10th character (pos index 9)
+  const decodeYearFromVin = (vin: string): string => {
+    const code = vin.charAt(9).toUpperCase();
+    const map: Record<string, number> = {
+      'Y': 2000, '1': 2001, '2': 2002, '3': 2003, '4': 2004,
+      '5': 2005, '6': 2006, '7': 2007, '8': 2008, '9': 2009,
+      'A': 2010, 'B': 2011, 'C': 2012, 'D': 2013, 'E': 2014,
+      'F': 2015, 'G': 2016, 'H': 2017, 'J': 2018, 'K': 2019,
+      'L': 2020, 'M': 2021, 'N': 2022, 'P': 2023, 'R': 2024,
+      'S': 2025, 'T': 2026, 'V': 2027, 'W': 2028, 'X': 2029,
+    };
+    // VIN 7th char determines 30-year cycle: if it's a letter, add 30
+    const seventh = vin.charAt(6).toUpperCase();
+    const base = map[code];
+    if (base === undefined) return '';
+    // For 1980-2009 era vehicles, 7th char is typically a digit
+    // For 2010+ vehicles, 7th char can be a letter (alpha)
+    if (base >= 2010 || /[A-Z]/.test(seventh)) return base.toString();
+    // If 7th is digit and base < 2010, it could be 1980-2009 range
+    return (base - 30 >= 1980) ? (base - 30).toString() : base.toString();
+  };
+
   const decodeVin = async () => {
     if (!newVehicle.vin || newVehicle.vin.length < 17) {
       alert('Enter a complete VIN (17 characters)');
@@ -125,14 +147,43 @@ export default function Home() {
       const res = await fetch(`https://vpic.nhtsa.dot.gov/api/vehicles/decodevin/${newVehicle.vin}?format=json`);
       const data = await res.json();
       const vars = data.Results || [];
-      const getVar = (name: string) => vars.find((v: any) => v.Variable === name)?.Value?.trim() || '';
-      const year = getVar('Model Year');
+      // NHTSA returns "0" or empty string for unknown values — filter those out
+      const getVar = (name: string) => {
+        const val = vars.find((v: any) => v.Variable === name)?.Value?.trim() || '';
+        return (val && val !== '0' && val !== 'Not Applicable') ? val : '';
+      };
+      let year = getVar('Model Year');
       const make = getVar('Make');
       const model = getVar('Model');
-      if (year || make || model) {
-        setNewVehicle({ ...newVehicle, year, make, model: model || newVehicle.model });
+
+      // Fallback: decode year from VIN 10th character if NHTSA didn't return it
+      if (!year) {
+        year = decodeYearFromVin(newVehicle.vin);
       }
-    } catch (e) { /* silent fail */ }
+
+      if (year || make || model) {
+        setNewVehicle(prev => ({
+          ...prev,
+          year: year || prev.year,
+          make: make || prev.make,
+          model: model || prev.model,
+        }));
+        if (!make && !model && year) {
+          alert(`Decoded year (${year}) from VIN. Make/model not found — please select manually.`);
+        }
+      } else {
+        alert('Could not decode this VIN. Please enter year, make, and model manually.');
+      }
+    } catch (e) {
+      // Fallback to VIN character decode
+      const year = decodeYearFromVin(newVehicle.vin);
+      if (year) {
+        setNewVehicle(prev => ({ ...prev, year }));
+        alert(`Decoded year (${year}) from VIN. Make/model not available offline — please select manually.`);
+      } else {
+        alert('VIN decode failed. Please enter details manually.');
+      }
+    }
     setIsDecoding(false);
   };
 
