@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 interface Vehicle {
   id: string;
@@ -18,6 +18,53 @@ const LOCATIONS = ['Front Lot', 'Rear Lot', 'Side Lot', 'Service Bay', 'Detail S
 
 const STAGES = ['Pending Inventory', 'Awaiting Detail', 'Awaiting Photos', 'Awaiting Service', 'Pending Estimate', 'Pending Approval', 'Approved - Pending Repair', 'Ready for Sale'];
 
+// Common used car makes/models by year (for dropdowns)
+const YEARS = Array.from({ length: 25 }, (_, i) => (2026 - i).toString());
+
+const MAKES_MODELS: Record<string, string[]> = {
+  'Chevrolet': ['Silverado 1500', 'Silverado 2500', 'Equinox', 'Traverse', 'Tahoe', 'Suburban', 'Colorado', 'Camaro', 'Malibu', 'Impala', 'Express 1500', 'Express 2500', 'Cruze', 'Trax', 'Blazer'],
+  'Ford': ['F-150', 'F-250', 'F-350', 'Explorer', 'Expedition', 'Escape', 'Edge', 'Mustang', 'Ranger', 'Bronco', 'Transit 150', 'Transit 250', 'Focus', 'Fusion', 'Escape'],
+  'Toyota': ['Camry', 'Corolla', 'RAV4', 'Highlander', '4Runner', 'Tacoma', 'Tundra', 'Prius', 'Sienna', 'Sequoia', 'Crown'],
+  'Honda': ['Civic', 'Accord', 'CR-V', 'Pilot', 'HR-V', 'Odyssey', 'Ridgeline', 'Passport'],
+  'Nissan': ['Altima', 'Rogue', 'Sentra', 'Pathfinder', 'Armada', 'Frontier', 'Murano', 'Kicks', 'Leaf'],
+  'GMC': ['Sierra 1500', 'Sierra 2500', 'Acadia', 'Terrain', 'Yukon', 'Yukon XL', 'Canyon', 'Envoy'],
+  'Buick': ['Enclave', 'Encore', 'Envision', 'Regal', 'LaCrosse', 'Verano'],
+  'Cadillac': ['Escalade', 'Escalade ESV', 'XT4', 'XT5', 'XT6', 'CT5', 'CT4', 'SRX'],
+  'Dodge': ['Charger', 'Challenger', 'Durango', 'Journey', 'Grand Caravan', 'Hornet'],
+  'Jeep': ['Wrangler', 'Grand Cherokee', 'Cherokee', 'Compass', 'Renegade', 'Gladiator', 'Wagoneer'],
+  'Ram': ['1500', '2500', '3500', 'ProMaster'],
+  'Mazda': ['CX-5', 'CX-50', 'CX-9', 'Mazda3', 'Mazda6', 'CX-30'],
+  'Subaru': ['Outback', 'Forester', 'Crosstrek', 'Impreza', 'Legacy', 'Ascent', 'Solterra'],
+  'Volkswagen': ['Tiguan', 'Atlas', 'Jetta', 'Passat', 'Golf', 'Taos', 'ID.4'],
+  'Hyundai': ['Tucson', 'Santa Fe', 'Elantra', 'Sonata', 'Palisade', 'Venue', 'Kona', 'Ioniq 5'],
+  'Kia': ['Sportage', 'Telluride', 'Sorento', 'Forte', 'K5', 'Seltos', 'Carnival', 'EV6'],
+  'Lexus': ['RX', 'ES', 'NX', 'GX', 'LX', 'IS', 'UX', 'RZ'],
+  'BMW': ['X3', 'X5', 'X7', 'X1', '3 Series', '5 Series', '7 Series', 'iX'],
+  'Mercedes-Benz': ['GLC', 'GLE', 'GLS', 'C-Class', 'E-Class', 'S-Class', 'EQB', 'EQE'],
+  'Audi': ['Q5', 'Q7', 'Q3', 'A4', 'A6', 'A3', 'e-tron', 'Q4 e-tron'],
+  'Porsche': ['Cayenne', 'Macan', '911', 'Panamera', 'Taycan'],
+  'Volvo': ['XC90', 'XC60', 'XC40', 'S60', 'S90', 'V60'],
+  'Tesla': ['Model 3', 'Model Y', 'Model S', 'Model X', 'Cybertruck'],
+  'Chrysler': ['Pacifica', '300', 'Voyager'],
+  'Lincoln': ['Aviator', 'Navigator', 'Corsair', 'Nautilus', 'MKZ', 'Continental'],
+  'Acura': ['MDX', 'RDX', 'TLX', 'ILX', 'RLX'],
+  'Infiniti': ['QX60', 'QX80', 'QX50', 'Q50', 'Q60'],
+  'Genesis': ['GV80', 'GV70', 'G80', 'G70', 'GV60'],
+  'Mitsubishi': ['Outlander', 'Eclipse Cross', 'Mirage', 'Triton'],
+  'Suzuki': ['Swift', 'Vitara', 'S-Cross', 'Jimny'],
+  'Land Rover': ['Range Rover', 'Range Rover Sport', 'Defender', 'Discovery', 'Range Rover Evoque'],
+  'Jaguar': ['F-PACE', 'E-PACE', 'I-PACE', 'XF', 'XE'],
+  'Alfa Romeo': ['Stelvio', 'Giulia', 'Tonale'],
+  'Peugeot': ['3008', '5008', '208', '508'],
+  'Renault': ['Arkana', 'Koleos', 'Captur', 'Clio'],
+  'Fiat': ['500X', '500L', 'Panda'],
+  'MINI': ['Cooper', 'Countryman', 'Clubman', 'Cooper SE'],
+  'Cupra': ['Formentor', 'Ateca', 'Leon'],
+  'Polestar': ['2', '3', '4']
+};
+
+const COMMON_MAKES = Object.keys(MAKES_MODELS);
+
 const initialVehicles: Vehicle[] = [
   { id: '1', stockNum: 'R1770526', year: '2021', make: 'Chevrolet', model: 'Equinox', vin: '', status: 'Approved - Pending Repair', location: 'Service Bay', age: 5 },
   { id: '2', stockNum: 'R1770526', year: '2023', make: 'Buick', model: 'Enclave', vin: '', status: 'Pending Inventory', location: 'Front Lot', age: 7 },
@@ -31,8 +78,12 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState('all');
   const [showAddForm, setShowAddForm] = useState(false);
   const [isDecoding, setIsDecoding] = useState(false);
-  const [newVehicle, setNewVehicle] = useState({ stockNum: '', year: '', make: '', model: '', vin: '', location: 'Front Lot' });
+  const [newVehicle, setNewVehicle] = useState({ year: '', make: '', model: '', vin: '', stockNum: '', location: 'Front Lot' });
   const [searchQuery, setSearchQuery] = useState('');
+
+  // Dependent dropdown logic
+  const selectedMake = newVehicle.make;
+  const modelsForMake = selectedMake ? (MAKES_MODELS[selectedMake] || []) : [];
 
   const filteredVehicles = vehicles.filter(v => {
     const matchesTab = activeTab === 'all' || v.status === activeTab;
@@ -54,24 +105,28 @@ export default function Home() {
       const res = await fetch(`https://vpic.nhtsa.dot.gov/api/vehicles/decodevin/${newVehicle.vin}?format=json`);
       const data = await res.json();
       const vars = data.Results || [];
-      const getVar = (id: string) => vars.find((v: any) => v.VariableID === parseInt(id))?.Value || '';
+      const getVar = (name: string) => vars.find((v: any) => v.Variable === name)?.Value?.trim() || '';
       
-      const year = getVar('29') || getVar('85') || '';
-      const make = getVar('26') || getVar('88') || '';
-      const model = getVar('28') || getVar('87') || '';
+      const year = getVar('Model Year') || getVar('Model Year');
+      const make = getVar('Make') || '';
+      const model = getVar('Model') || '';
       
       if (year || make || model) {
-        setNewVehicle({ ...newVehicle, year, make, model });
+        setNewVehicle({ ...newVehicle, year, make, model: model || newVehicle.model });
       } else {
-        alert('Could not decode VIN. Please enter details manually.');
+        alert('Could not decode VIN. Please select manually.');
       }
     } catch (e) {
-      alert('Error decoding VIN. Please enter details manually.');
+      alert('Error decoding VIN. Please select manually.');
     }
     setIsDecoding(false);
   };
 
   const handleAddVehicle = () => {
+    if (!newVehicle.year || !newVehicle.make || !newVehicle.model) {
+      alert('Please select year, make, and model');
+      return;
+    }
     const vehicle: Vehicle = {
       id: Date.now().toString(),
       stockNum: newVehicle.stockNum || `R${Date.now().toString().slice(-6)}`,
@@ -85,7 +140,7 @@ export default function Home() {
     };
     setVehicles([vehicle, ...vehicles]);
     setShowAddForm(false);
-    setNewVehicle({ stockNum: '', year: '', make: '', model: '', vin: '', location: 'Front Lot' });
+    setNewVehicle({ year: '', make: '', model: '', vin: '', stockNum: '', location: 'Front Lot' });
   };
 
   const getStatusColor = (status: string) => {
@@ -160,7 +215,7 @@ export default function Home() {
             <label style={{ display: 'block', fontSize: '12px', color: '#9ca3af', marginBottom: '4px' }}>VIN (optional - we'll look up the rest)</label>
             <div style={{ display: 'flex', gap: '8px' }}>
               <input 
-                placeholder="Enter VIN" 
+                placeholder="Enter VIN"
                 value={newVehicle.vin}
                 onChange={e => setNewVehicle({...newVehicle, vin: e.target.value.toUpperCase()})}
                 maxLength={17}
@@ -176,6 +231,45 @@ export default function Home() {
             </div>
           </div>
 
+          {/* Year/Make/Model Row - Dependent Dropdowns */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr 2fr', gap: '8px', marginBottom: '12px' }}>
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', color: '#9ca3af', marginBottom: '4px' }}>Year *</label>
+              <select 
+                value={newVehicle.year}
+                onChange={e => setNewVehicle({...newVehicle, year: e.target.value, make: '', model: ''})}
+                style={{ width: '100%', backgroundColor: '#374151', border: '1px solid #4b5563', borderRadius: '8px', padding: '10px 12px', color: 'white', fontSize: '14px' }}
+              >
+                <option value="">Select Year</option>
+                {YEARS.map(y => <option key={y} value={y}>{y}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', color: '#9ca3af', marginBottom: '4px' }}>Make *</label>
+              <select 
+                value={newVehicle.make}
+                onChange={e => setNewVehicle({...newVehicle, make: e.target.value, model: ''})}
+                disabled={!newVehicle.year}
+                style={{ width: '100%', backgroundColor: '#374151', border: '1px solid #4b5563', borderRadius: '8px', padding: '10px 12px', color: 'white', fontSize: '14px', opacity: newVehicle.year ? 1 : 0.5 }}
+              >
+                <option value="">Select Make</option>
+                {COMMON_MAKES.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', color: '#9ca3af', marginBottom: '4px' }}>Model *</label>
+              <select 
+                value={newVehicle.model}
+                onChange={e => setNewVehicle({...newVehicle, model: e.target.value})}
+                disabled={!newVehicle.make}
+                style={{ width: '100%', backgroundColor: '#374151', border: '1px solid #4b5563', borderRadius: '8px', padding: '10px 12px', color: 'white', fontSize: '14px', opacity: newVehicle.make ? 1 : 0.5 }}
+              >
+                <option value="">Select Model</option>
+                {modelsForMake.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+            </div>
+          </div>
+
           {/* Stock # */}
           <div style={{ marginBottom: '12px' }}>
             <label style={{ display: 'block', fontSize: '12px', color: '#9ca3af', marginBottom: '4px' }}>Stock #</label>
@@ -185,37 +279,6 @@ export default function Home() {
               onChange={e => setNewVehicle({...newVehicle, stockNum: e.target.value.toUpperCase()})}
               style={{ width: '100%', backgroundColor: '#374151', border: '1px solid #4b5563', borderRadius: '8px', padding: '10px 12px', color: 'white', fontSize: '14px' }}
             />
-          </div>
-
-          {/* Year/Make/Model Row */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr 2fr', gap: '8px', marginBottom: '12px' }}>
-            <div>
-              <label style={{ display: 'block', fontSize: '12px', color: '#9ca3af', marginBottom: '4px' }}>Year</label>
-              <input 
-                placeholder="2024"
-                value={newVehicle.year}
-                onChange={e => setNewVehicle({...newVehicle, year: e.target.value})}
-                style={{ width: '100%', backgroundColor: '#374151', border: '1px solid #4b5563', borderRadius: '8px', padding: '10px 12px', color: 'white', fontSize: '14px' }}
-              />
-            </div>
-            <div>
-              <label style={{ display: 'block', fontSize: '12px', color: '#9ca3af', marginBottom: '4px' }}>Make</label>
-              <input 
-                placeholder="Toyota"
-                value={newVehicle.make}
-                onChange={e => setNewVehicle({...newVehicle, make: e.target.value})}
-                style={{ width: '100%', backgroundColor: '#374151', border: '1px solid #4b5563', borderRadius: '8px', padding: '10px 12px', color: 'white', fontSize: '14px' }}
-              />
-            </div>
-            <div>
-              <label style={{ display: 'block', fontSize: '12px', color: '#9ca3af', marginBottom: '4px' }}>Model</label>
-              <input 
-                placeholder="Camry"
-                value={newVehicle.model}
-                onChange={e => setNewVehicle({...newVehicle, model: e.target.value})}
-                style={{ width: '100%', backgroundColor: '#374151', border: '1px solid #4b5563', borderRadius: '8px', padding: '10px 12px', color: 'white', fontSize: '14px' }}
-              />
-            </div>
           </div>
 
           {/* Location */}
