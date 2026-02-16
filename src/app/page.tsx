@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 
 interface Vehicle {
   id: string;
@@ -12,88 +12,108 @@ interface Vehicle {
   status: string;
   location: string;
   age: number;
+  assignee?: string;
+  notes?: string;
+  updatedAt?: string;
 }
 
 const LOCATIONS = ['Front Lot', 'Rear Lot', 'Side Lot', 'Service Bay', 'Detail Shop', 'Auction Hold', 'Sold (Pending Pickup)', 'In Transit'];
 
-const STAGES = ['Pending Inventory', 'Awaiting Detail', 'Awaiting Photos', 'Awaiting Service', 'Pending Estimate', 'Pending Approval', 'Approved - Pending Repair', 'Ready for Sale'];
-
-// Common used car makes/models by year (for dropdowns)
-const YEARS = Array.from({ length: 25 }, (_, i) => (2026 - i).toString());
+const STAGES = [
+  '1. Received - Inspection',
+  '2. Recon Assignment', 
+  '3. Service - Mechanical',
+  '4. Detail - Interior/Exterior',
+  '5. Final Quality Check',
+  '6. Photos & Marketing',
+  '7. Lot Ready - Front Line',
+  '8. Sold - Delivered'
+];
 
 const MAKES_MODELS: Record<string, string[]> = {
-  'Chevrolet': ['Silverado 1500', 'Silverado 2500', 'Equinox', 'Traverse', 'Tahoe', 'Suburban', 'Colorado', 'Camaro', 'Malibu', 'Impala', 'Express 1500', 'Express 2500', 'Cruze', 'Trax', 'Blazer'],
-  'Ford': ['F-150', 'F-250', 'F-350', 'Explorer', 'Expedition', 'Escape', 'Edge', 'Mustang', 'Ranger', 'Bronco', 'Transit 150', 'Transit 250', 'Focus', 'Fusion', 'Escape'],
-  'Toyota': ['Camry', 'Corolla', 'RAV4', 'Highlander', '4Runner', 'Tacoma', 'Tundra', 'Prius', 'Sienna', 'Sequoia', 'Crown'],
+  'Chevrolet': ['Silverado 1500', 'Silverado 2500', 'Equinox', 'Traverse', 'Tahoe', 'Suburban', 'Colorado', 'Camaro', 'Malibu', 'Express 1500', 'Express 2500', 'Cruze', 'Trax', 'Blazer'],
+  'Ford': ['F-150', 'F-250', 'F-350', 'Explorer', 'Expedition', 'Escape', 'Edge', 'Mustang', 'Ranger', 'Bronco', 'Transit 150', 'Transit 250', 'Focus', 'Fusion'],
+  'Toyota': ['Camry', 'Corolla', 'RAV4', 'Highlander', '4Runner', 'Tacoma', 'Tundra', 'Prius', 'Sienna', 'Sequoia'],
   'Honda': ['Civic', 'Accord', 'CR-V', 'Pilot', 'HR-V', 'Odyssey', 'Ridgeline', 'Passport'],
-  'Nissan': ['Altima', 'Rogue', 'Sentra', 'Pathfinder', 'Armada', 'Frontier', 'Murano', 'Kicks', 'Leaf'],
-  'GMC': ['Sierra 1500', 'Sierra 2500', 'Acadia', 'Terrain', 'Yukon', 'Yukon XL', 'Canyon', 'Envoy'],
-  'Buick': ['Enclave', 'Encore', 'Envision', 'Regal', 'LaCrosse', 'Verano'],
-  'Cadillac': ['Escalade', 'Escalade ESV', 'XT4', 'XT5', 'XT6', 'CT5', 'CT4', 'SRX'],
+  'Nissan': ['Altima', 'Rogue', 'Sentra', 'Pathfinder', 'Armada', 'Frontier', 'Murano', 'Kicks'],
+  'GMC': ['Sierra 1500', 'Sierra 2500', 'Acadia', 'Terrain', 'Yukon', 'Yukon XL', 'Canyon'],
+  'Buick': ['Enclave', 'Encore', 'Envision', 'Regal', 'LaCrosse'],
+  'Cadillac': ['Escalade', 'Escalade ESV', 'XT4', 'XT5', 'XT6', 'CT5', 'SRX'],
   'Dodge': ['Charger', 'Challenger', 'Durango', 'Journey', 'Grand Caravan', 'Hornet'],
-  'Jeep': ['Wrangler', 'Grand Cherokee', 'Cherokee', 'Compass', 'Renegade', 'Gladiator', 'Wagoneer'],
+  'Jeep': ['Wrangler', 'Grand Cherokee', 'Cherokee', 'Compass', 'Renegade', 'Gladiator'],
   'Ram': ['1500', '2500', '3500', 'ProMaster'],
   'Mazda': ['CX-5', 'CX-50', 'CX-9', 'Mazda3', 'Mazda6', 'CX-30'],
-  'Subaru': ['Outback', 'Forester', 'Crosstrek', 'Impreza', 'Legacy', 'Ascent', 'Solterra'],
-  'Volkswagen': ['Tiguan', 'Atlas', 'Jetta', 'Passat', 'Golf', 'Taos', 'ID.4'],
-  'Hyundai': ['Tucson', 'Santa Fe', 'Elantra', 'Sonata', 'Palisade', 'Venue', 'Kona', 'Ioniq 5'],
-  'Kia': ['Sportage', 'Telluride', 'Sorento', 'Forte', 'K5', 'Seltos', 'Carnival', 'EV6'],
-  'Lexus': ['RX', 'ES', 'NX', 'GX', 'LX', 'IS', 'UX', 'RZ'],
-  'BMW': ['X3', 'X5', 'X7', 'X1', '3 Series', '5 Series', '7 Series', 'iX'],
-  'Mercedes-Benz': ['GLC', 'GLE', 'GLS', 'C-Class', 'E-Class', 'S-Class', 'EQB', 'EQE'],
-  'Audi': ['Q5', 'Q7', 'Q3', 'A4', 'A6', 'A3', 'e-tron', 'Q4 e-tron'],
-  'Porsche': ['Cayenne', 'Macan', '911', 'Panamera', 'Taycan'],
-  'Volvo': ['XC90', 'XC60', 'XC40', 'S60', 'S90', 'V60'],
+  'Subaru': ['Outback', 'Forester', 'Crosstrek', 'Impreza', 'Legacy', 'Ascent'],
+  'Volkswagen': ['Tiguan', 'Atlas', 'Jetta', 'Passat', 'Golf', 'Taos'],
+  'Hyundai': ['Tucson', 'Santa Fe', 'Elantra', 'Sonata', 'Palisade', 'Venue', 'Kona'],
+  'Kia': ['Sportage', 'Telluride', 'Sorento', 'Forte', 'K5', 'Seltos', 'Carnival'],
+  'Lexus': ['RX', 'ES', 'NX', 'GX', 'LX', 'IS', 'UX'],
+  'BMW': ['X3', 'X5', 'X7', 'X1', '3 Series', '5 Series'],
+  'Mercedes-Benz': ['GLC', 'GLE', 'GLS', 'C-Class', 'E-Class', 'S-Class'],
+  'Audi': ['Q5', 'Q7', 'Q3', 'A4', 'A6', 'A3'],
   'Tesla': ['Model 3', 'Model Y', 'Model S', 'Model X', 'Cybertruck'],
   'Chrysler': ['Pacifica', '300', 'Voyager'],
-  'Lincoln': ['Aviator', 'Navigator', 'Corsair', 'Nautilus', 'MKZ', 'Continental'],
-  'Acura': ['MDX', 'RDX', 'TLX', 'ILX', 'RLX'],
+  'Lincoln': ['Aviator', 'Navigator', 'Corsair', 'Nautilus', 'MKZ'],
+  'Acura': ['MDX', 'RDX', 'TLX', 'ILX'],
   'Infiniti': ['QX60', 'QX80', 'QX50', 'Q50', 'Q60'],
-  'Genesis': ['GV80', 'GV70', 'G80', 'G70', 'GV60'],
-  'Mitsubishi': ['Outlander', 'Eclipse Cross', 'Mirage', 'Triton'],
-  'Suzuki': ['Swift', 'Vitara', 'S-Cross', 'Jimny'],
-  'Land Rover': ['Range Rover', 'Range Rover Sport', 'Defender', 'Discovery', 'Range Rover Evoque'],
-  'Jaguar': ['F-PACE', 'E-PACE', 'I-PACE', 'XF', 'XE'],
-  'Alfa Romeo': ['Stelvio', 'Giulia', 'Tonale'],
-  'Peugeot': ['3008', '5008', '208', '508'],
-  'Renault': ['Arkana', 'Koleos', 'Captur', 'Clio'],
-  'Fiat': ['500X', '500L', 'Panda'],
-  'MINI': ['Cooper', 'Countryman', 'Clubman', 'Cooper SE'],
-  'Cupra': ['Formentor', 'Ateca', 'Leon'],
-  'Polestar': ['2', '3', '4']
+  'Genesis': ['GV80', 'GV70', 'G80', 'G70'],
+  'Mitsubishi': ['Outlander', 'Eclipse Cross', 'Mirage'],
+  'Other': ['Other']
 };
 
+const YEARS = Array.from({ length: 25 }, (_, i) => (2026 - i).toString());
 const COMMON_MAKES = Object.keys(MAKES_MODELS);
 
+// Role-based stage access
+const ROLE_STAGES: Record<string, string[]> = {
+  'Manager': STAGES,
+  'Service': STAGES.slice(2, 4), // Service stages
+  'Detail': STAGES.slice(3, 6),  // Detail stages  
+  'Sales': STAGES.slice(6, 8),   // Lot ready + Sold
+};
+
 const initialVehicles: Vehicle[] = [
-  { id: '1', stockNum: 'R1770526', year: '2021', make: 'Chevrolet', model: 'Equinox', vin: '', status: 'Approved - Pending Repair', location: 'Service Bay', age: 5 },
-  { id: '2', stockNum: 'R1770526', year: '2023', make: 'Buick', model: 'Enclave', vin: '', status: 'Pending Inventory', location: 'Front Lot', age: 7 },
-  { id: '3', stockNum: 'R1770526', year: '2020', make: 'Cadillac', model: 'Escalade ESV', vin: '', status: 'Ready for Sale', location: 'Front Lot', age: 7 },
-  { id: '4', stockNum: 'R1770526', year: '2018', make: 'Chevrolet', model: 'Express 2500', vin: '', status: 'Awaiting Photos', location: 'Detail Shop', age: 0 },
-  { id: '5', stockNum: 'R1770581', year: '2020', make: 'Chevrolet', model: 'Silverado 1500', vin: '', status: 'Awaiting Detail', location: 'Rear Lot', age: 0 },
+  { id: '1', stockNum: 'R1770526', year: '2021', make: 'Chevrolet', model: 'Equinox', vin: '', status: '3. Service - Mechanical', location: 'Service Bay', age: 5 },
+  { id: '2', stockNum: 'R1770527', year: '2023', make: 'Buick', model: 'Enclave', vin: '', status: '1. Received - Inspection', location: 'Front Lot', age: 1 },
+  { id: '3', stockNum: 'R1770528', year: '2020', make: 'Cadillac', model: 'Escalade ESV', vin: '', status: '7. Lot Ready - Front Line', location: 'Front Lot', age: 3 },
+  { id: '4', stockNum: 'R1770529', year: '2018', make: 'Chevrolet', model: 'Express 2500', vin: '', status: '4. Detail - Interior/Exterior', location: 'Detail Shop', age: 2 },
+  { id: '5', stockNum: 'R1770530', year: '2020', make: 'Chevrolet', model: 'Silverado 1500', vin: '', status: '5. Final Quality Check', location: 'Rear Lot', age: 1 },
+  { id: '6', stockNum: 'R1770531', year: '2022', make: 'Ford', model: 'F-150', vin: '', status: '8. Sold - Delivered', location: 'Sold (Pending Pickup)', age: 0 },
+  { id: '7', stockNum: 'R1770532', year: '2019', make: 'Toyota', model: 'Camry', vin: '', status: '6. Photos & Marketing', location: 'Front Lot', age: 4 },
+  { id: '8', stockNum: 'R1770533', year: '2021', make: 'Honda', model: 'Civic', vin: '', status: '2. Recon Assignment', location: 'Rear Lot', age: 1 },
 ];
 
 export default function Home() {
   const [vehicles, setVehicles] = useState<Vehicle[]>(initialVehicles);
-  const [activeTab, setActiveTab] = useState('all');
+  const [userRole, setUserRole] = useState('Manager');
+  const [selectedVehicle, setSelectedVehicle] = useState<Vehicle | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
+  const [showActions, setShowActions] = useState(false);
   const [isDecoding, setIsDecoding] = useState(false);
   const [newVehicle, setNewVehicle] = useState({ year: '', make: '', model: '', vin: '', stockNum: '', location: 'Front Lot' });
-  const [searchQuery, setSearchQuery] = useState('');
+  
+  const roleStages = ROLE_STAGES[userRole] || STAGES;
+  
+  const getStageColor = (status: string) => {
+    const idx = STAGES.indexOf(status);
+    if (idx >= 6) return '#22c55e'; // Ready/Sold - green
+    if (idx >= 4) return '#3b82f6'; // Quality/Photos - blue
+    if (idx >= 2) return '#eab308'; // Service - yellow
+    return '#ef4444'; // New - red
+  };
 
-  // Dependent dropdown logic
-  const selectedMake = newVehicle.make;
-  const modelsForMake = selectedMake ? (MAKES_MODELS[selectedMake] || []) : [];
-
-  const filteredVehicles = vehicles.filter(v => {
-    const matchesTab = activeTab === 'all' || v.status === activeTab;
-    const matchesSearch = !searchQuery || 
-      v.stockNum.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      v.vin.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      v.make.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      v.model.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchesTab && matchesSearch;
-  });
+  const getStageIcon = (status: string) => {
+    const idx = STAGES.indexOf(status);
+    if (idx === 0) return '📥';
+    if (idx === 1) return '📋';
+    if (idx === 2) return '🔧';
+    if (idx === 3) return '✨';
+    if (idx === 4) return '✅';
+    if (idx === 5) return '📸';
+    if (idx === 6) return '🚗';
+    if (idx === 7) return '💰';
+    return '📌';
+  };
 
   const decodeVin = async () => {
     if (!newVehicle.vin || newVehicle.vin.length < 17) {
@@ -106,19 +126,13 @@ export default function Home() {
       const data = await res.json();
       const vars = data.Results || [];
       const getVar = (name: string) => vars.find((v: any) => v.Variable === name)?.Value?.trim() || '';
-      
-      const year = getVar('Model Year') || getVar('Model Year');
-      const make = getVar('Make') || '';
-      const model = getVar('Model') || '';
-      
+      const year = getVar('Model Year');
+      const make = getVar('Make');
+      const model = getVar('Model');
       if (year || make || model) {
         setNewVehicle({ ...newVehicle, year, make, model: model || newVehicle.model });
-      } else {
-        alert('Could not decode VIN. Please select manually.');
       }
-    } catch (e) {
-      alert('Error decoding VIN. Please select manually.');
-    }
+    } catch (e) { /* silent fail */ }
     setIsDecoding(false);
   };
 
@@ -134,194 +148,319 @@ export default function Home() {
       make: newVehicle.make,
       model: newVehicle.model,
       vin: newVehicle.vin,
-      status: 'Pending Inventory',
+      status: '1. Received - Inspection',
       location: newVehicle.location,
-      age: 0
+      age: 0,
+      updatedAt: new Date().toLocaleString()
     };
     setVehicles([vehicle, ...vehicles]);
     setShowAddForm(false);
     setNewVehicle({ year: '', make: '', model: '', vin: '', stockNum: '', location: 'Front Lot' });
   };
 
-  const getStatusColor = (status: string) => {
-    if (status === 'Ready for Sale') return '#22c55e';
-    if (status.includes('Pending') || status.includes('Awaiting')) return '#ef4444';
-    return '#eab308';
+  const updateVehicleStatus = (vehicleId: string, newStatus: string) => {
+    setVehicles(vehicles.map(v => 
+      v.id === vehicleId 
+        ? { ...v, status: newStatus, updatedAt: new Date().toLocaleString() }
+        : v
+    ));
+    setShowActions(false);
   };
 
+  const updateVehicleLocation = (vehicleId: string, newLocation: string) => {
+    setVehicles(vehicles.map(v => 
+      v.id === vehicleId 
+        ? { ...v, location: newLocation, updatedAt: new Date().toLocaleString() }
+        : v
+    ));
+    setShowActions(false);
+  };
+
+  const deleteVehicle = (vehicleId: string) => {
+    if (confirm('Remove this vehicle from inventory?')) {
+      setVehicles(vehicles.filter(v => v.id !== vehicleId));
+      setShowActions(false);
+      setSelectedVehicle(null);
+    }
+  };
+
+  const modelsForMake = newVehicle.make ? (MAKES_MODELS[newVehicle.make] || []) : [];
+  const readyCars = vehicles.filter(v => v.status.includes('Lot Ready') || v.status.includes('Sold'));
+  const inProgressCars = vehicles.filter(v => !v.status.includes('Lot Ready') && !v.status.includes('Sold'));
+
   return (
-    <div style={{ minHeight: '100vh', backgroundColor: '#111827', color: 'white', fontFamily: 'system-ui, sans-serif', paddingBottom: '40px' }}>
+    <div style={{ minHeight: '100vh', backgroundColor: '#0f172a', color: 'white', fontFamily: 'system-ui, sans-serif', paddingBottom: '80px' }}>
+      
       {/* Header */}
-      <header style={{ backgroundColor: '#1f2937', padding: '16px', borderBottom: '1px solid #374151', position: 'sticky', top: 0, zIndex: 100 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h1 style={{ fontSize: '22px', fontWeight: 'bold', margin: 0 }}>🚗 Car Manager</h1>
-          <span style={{ color: '#9ca3af', fontSize: '14px' }}>{vehicles.length} cars</span>
+      <header style={{ backgroundColor: '#1e293b', padding: '16px', borderBottom: '1px solid #334155', position: 'sticky', top: 0, zIndex: 100 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+          <h1 style={{ fontSize: '24px', fontWeight: 'bold', margin: 0 }}>🚗 Car Manager</h1>
+          <select 
+            value={userRole}
+            onChange={e => setUserRole(e.target.value)}
+            style={{ backgroundColor: '#475569', border: 'none', borderRadius: '8px', padding: '6px 12px', color: 'white', fontSize: '13px' }}
+          >
+            <option value="Manager">👑 Manager</option>
+            <option value="Service">🔧 Service</option>
+            <option value="Detail">✨ Detail</option>
+            <option value="Sales">💰 Sales</option>
+          </select>
+        </div>
+        
+        {/* Quick Stats */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '6px' }}>
+          <div style={{ backgroundColor: '#334155', padding: '8px', borderRadius: '8px', textAlign: 'center' }}>
+            <div style={{ fontSize: '18px', fontWeight: 'bold' }}>{vehicles.length}</div>
+            <div style={{ fontSize: '9px', color: '#94a3b8' }}>TOTAL</div>
+          </div>
+          <div style={{ backgroundColor: '#22c55e20', padding: '8px', borderRadius: '8px', textAlign: 'center' }}>
+            <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#22c55e' }}>{readyCars.length}</div>
+            <div style={{ fontSize: '9px', color: '#94a3b8' }}>READY</div>
+          </div>
+          <div style={{ backgroundColor: '#eab30820', padding: '8px', borderRadius: '8px', textAlign: 'center' }}>
+            <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#eab308' }}>{inProgressCars.length}</div>
+            <div style={{ fontSize: '9px', color: '#94a3b8' }}>IN PROG</div>
+          </div>
+          <div style={{ backgroundColor: '#ef444420', padding: '8px', borderRadius: '8px', textAlign: 'center' }}>
+            <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#ef4444' }}>{vehicles.filter(v => v.age > 7).length}</div>
+            <div style={{ fontSize: '9px', color: '#94a3b8' }}>AGING</div>
+          </div>
         </div>
       </header>
 
-      {/* Quick Stats */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', padding: '12px' }}>
-        <div style={{ backgroundColor: '#1f2937', padding: '10px', borderRadius: '8px', textAlign: 'center' }}>
-          <div style={{ fontSize: '20px', fontWeight: 'bold' }}>{vehicles.length}</div>
-          <div style={{ fontSize: '10px', color: '#9ca3af' }}>TOTAL</div>
+      {/* Ready for Sale Section */}
+      {readyCars.length > 0 && (
+        <div style={{ padding: '12px' }}>
+          <h2 style={{ fontSize: '14px', color: '#22c55e', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            🚗 READY TO SELL ({readyCars.length})
+          </h2>
+          <div style={{ display: 'grid', gap: '6px' }}>
+            {readyCars.map(v => (
+              <div 
+                key={v.id}
+                onClick={() => { setSelectedVehicle(v); setShowActions(true); }}
+                style={{ backgroundColor: '#22c55e20', border: '1px solid #22c55e40', padding: '12px', borderRadius: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+              >
+                <div>
+                  <div style={{ fontWeight: '600', fontSize: '15px' }}>{v.year} {v.make} {v.model}</div>
+                  <div style={{ fontSize: '11px', color: '#94a3b8' }}>#{v.stockNum} • {v.location}</div>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: '12px', color: '#22c55e', fontWeight: '600' }}>{v.status}</div>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
-        <div style={{ backgroundColor: '#1f2937', padding: '10px', borderRadius: '8px', textAlign: 'center' }}>
-          <div style={{ fontSize: '20px', fontWeight: 'bold', color: '#22c55e' }}>{vehicles.filter(v => v.status === 'Ready for Sale').length}</div>
-          <div style={{ fontSize: '10px', color: '#9ca3af' }}>READY</div>
-        </div>
-        <div style={{ backgroundColor: '#1f2937', padding: '10px', borderRadius: '8px', textAlign: 'center' }}>
-          <div style={{ fontSize: '20px', fontWeight: 'bold', color: '#ef4444' }}>{vehicles.filter(v => v.age > 7).length}</div>
-          <div style={{ fontSize: '10px', color: '#9ca3af' }}>OVER 7 DAYS</div>
-        </div>
-      </div>
+      )}
 
-      {/* Search */}
-      <div style={{ padding: '0 12px 8px' }}>
-        <input 
-          placeholder="Search stock#, VIN, make, model..."
-          value={searchQuery}
-          onChange={e => setSearchQuery(e.target.value)}
-          style={{ width: '100%', backgroundColor: '#374151', border: '1px solid #4b5563', borderRadius: '8px', padding: '10px 12px', color: 'white', fontSize: '14px' }}
-        />
-      </div>
-
-      {/* Stage Filters */}
-      <div style={{ padding: '0 12px', overflowX: 'auto' }}>
-        <div style={{ display: 'flex', gap: '6px', paddingBottom: '8px' }}>
-          <button onClick={() => setActiveTab('all')} style={{ padding: '8px 14px', borderRadius: '20px', border: 'none', backgroundColor: activeTab === 'all' ? '#3b82f6' : '#374151', color: 'white', fontSize: '12px', whiteSpace: 'nowrap', fontWeight: activeTab === 'all' ? 'bold' : 'normal' }}>
-            All ({vehicles.length})
-          </button>
-          {STAGES.filter(s => vehicles.some(v => v.status === s)).map(stage => (
-            <button key={stage} onClick={() => setActiveTab(stage === activeTab ? 'all' : stage)} style={{ padding: '8px 14px', borderRadius: '20px', border: 'none', backgroundColor: activeTab === stage ? '#3b82f6' : '#374151', color: 'white', fontSize: '12px', whiteSpace: 'nowrap' }}>
-              {vehicles.filter(v => v.status === stage).length} {stage.substring(0, 8)}
-            </button>
+      {/* In Progress Section */}
+      <div style={{ padding: '12px' }}>
+        <h2 style={{ fontSize: '14px', color: '#f59e0b', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+          🔄 IN PROGRESS ({inProgressCars.length})
+        </h2>
+        <div style={{ display: 'grid', gap: '6px' }}>
+          {inProgressCars.map(v => (
+            <div 
+              key={v.id}
+              onClick={() => { setSelectedVehicle(v); setShowActions(true); }}
+              style={{ backgroundColor: '#1e293b', borderLeft: `4px solid ${getStageColor(v.status)}`, padding: '12px', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+            >
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: '600', fontSize: '15px' }}>{v.year} {v.make} {v.model}</div>
+                <div style={{ fontSize: '11px', color: '#94a3b8' }}>#{v.stockNum} • {v.location}</div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontSize: '12px', color: getStageColor(v.status), fontWeight: '600' }}>{getStageIcon(v.status)} {v.status.split(' - ')[0]}</div>
+                <div style={{ fontSize: '10px', color: v.age > 7 ? '#ef4444' : '#94a3b8' }}>{v.age}d</div>
+              </div>
+            </div>
           ))}
         </div>
       </div>
 
-      {/* Add Button */}
-      <div style={{ padding: '12px' }}>
-        <button onClick={() => setShowAddForm(!showAddForm)} style={{ width: '100%', backgroundColor: showAddForm ? '#374151' : '#2563eb', color: 'white', fontWeight: '600', padding: '14px', borderRadius: '12px', border: 'none', fontSize: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
-          {showAddForm ? '✕ Cancel' : '+ Quick Add Vehicle'}
-        </button>
-      </div>
+      {/* Floating Action Button */}
+      <button 
+        onClick={() => setShowAddForm(true)}
+        style={{ 
+          position: 'fixed', bottom: '24px', right: '24px', 
+          backgroundColor: '#2563eb', color: 'white', 
+          width: '60px', height: '60px', borderRadius: '30px', 
+          border: 'none', fontSize: '28px', boxShadow: '0 4px 20px rgba(37,99,235,0.4)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center'
+        }}
+      >
+        +
+      </button>
 
-      {/* Add Form */}
+      {/* Add Vehicle Modal */}
       {showAddForm && (
-        <div style={{ margin: '0 12px 12px', backgroundColor: '#1f2937', padding: '16px', borderRadius: '12px' }}>
-          
-          {/* VIN Decode */}
-          <div style={{ marginBottom: '12px' }}>
-            <label style={{ display: 'block', fontSize: '12px', color: '#9ca3af', marginBottom: '4px' }}>VIN (optional - we'll look up the rest)</label>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <input 
-                placeholder="Enter VIN"
-                value={newVehicle.vin}
-                onChange={e => setNewVehicle({...newVehicle, vin: e.target.value.toUpperCase()})}
-                maxLength={17}
-                style={{ flex: 1, backgroundColor: '#374151', border: '1px solid #4b5563', borderRadius: '8px', padding: '10px 12px', color: 'white', fontSize: '14px' }}
-              />
-              <button 
-                onClick={decodeVin}
-                disabled={isDecoding}
-                style={{ backgroundColor: '#7c3aed', color: 'white', padding: '10px 16px', borderRadius: '8px', border: 'none', fontWeight: '600', fontSize: '13px', opacity: isDecoding ? 0.7 : 1 }}
-              >
-                {isDecoding ? '...' : 'Decode'}
-              </button>
+        <div style={{ 
+          position: 'fixed', inset: 0, backgroundColor: '#00000080', zIndex: 200,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px'
+        }}>
+          <div style={{ backgroundColor: '#1e293b', padding: '20px', borderRadius: '16px', width: '100%', maxWidth: '400px', maxHeight: '90vh', overflow: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h2 style={{ fontSize: '18px', fontWeight: 'bold', margin: 0 }}>Add Vehicle</h2>
+              <button onClick={() => setShowAddForm(false)} style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: '24px' }}>✕</button>
             </div>
-          </div>
+            
+            {/* VIN */}
+            <div style={{ marginBottom: '12px' }}>
+              <label style={{ display: 'block', fontSize: '12px', color: '#94a3b8', marginBottom: '4px' }}>VIN (optional)</label>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <input 
+                  placeholder="Enter VIN"
+                  value={newVehicle.vin}
+                  onChange={e => setNewVehicle({...newVehicle, vin: e.target.value.toUpperCase()})}
+                  maxLength={17}
+                  style={{ flex: 1, backgroundColor: '#334155', border: 'none', borderRadius: '8px', padding: '12px', color: 'white', fontSize: '14px' }}
+                />
+                <button 
+                  onClick={decodeVin}
+                  disabled={isDecoding}
+                  style={{ backgroundColor: '#7c3aed', color: 'white', padding: '12px 16px', borderRadius: '8px', border: 'none', fontWeight: '600' }}
+                >
+                  {isDecoding ? '...' : 'Decode'}
+                </button>
+              </div>
+            </div>
 
-          {/* Year/Make/Model Row - Dependent Dropdowns */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr 2fr', gap: '8px', marginBottom: '12px' }}>
-            <div>
-              <label style={{ display: 'block', fontSize: '12px', color: '#9ca3af', marginBottom: '4px' }}>Year *</label>
+            {/* Year/Make/Model */}
+            <div style={{ display: 'grid', gap: '8px', marginBottom: '12px' }}>
               <select 
                 value={newVehicle.year}
                 onChange={e => setNewVehicle({...newVehicle, year: e.target.value, make: '', model: ''})}
-                style={{ width: '100%', backgroundColor: '#374151', border: '1px solid #4b5563', borderRadius: '8px', padding: '10px 12px', color: 'white', fontSize: '14px' }}
+                style={{ backgroundColor: '#334155', border: 'none', borderRadius: '8px', padding: '12px', color: 'white', fontSize: '14px' }}
               >
                 <option value="">Select Year</option>
                 {YEARS.map(y => <option key={y} value={y}>{y}</option>)}
               </select>
-            </div>
-            <div>
-              <label style={{ display: 'block', fontSize: '12px', color: '#9ca3af', marginBottom: '4px' }}>Make *</label>
               <select 
                 value={newVehicle.make}
                 onChange={e => setNewVehicle({...newVehicle, make: e.target.value, model: ''})}
                 disabled={!newVehicle.year}
-                style={{ width: '100%', backgroundColor: '#374151', border: '1px solid #4b5563', borderRadius: '8px', padding: '10px 12px', color: 'white', fontSize: '14px', opacity: newVehicle.year ? 1 : 0.5 }}
+                style={{ backgroundColor: '#334155', border: 'none', borderRadius: '8px', padding: '12px', color: 'white', fontSize: '14px', opacity: newVehicle.year ? 1 : 0.5 }}
               >
                 <option value="">Select Make</option>
                 {COMMON_MAKES.map(m => <option key={m} value={m}>{m}</option>)}
               </select>
-            </div>
-            <div>
-              <label style={{ display: 'block', fontSize: '12px', color: '#9ca3af', marginBottom: '4px' }}>Model *</label>
               <select 
                 value={newVehicle.model}
                 onChange={e => setNewVehicle({...newVehicle, model: e.target.value})}
                 disabled={!newVehicle.make}
-                style={{ width: '100%', backgroundColor: '#374151', border: '1px solid #4b5563', borderRadius: '8px', padding: '10px 12px', color: 'white', fontSize: '14px', opacity: newVehicle.make ? 1 : 0.5 }}
+                style={{ backgroundColor: '#334155', border: 'none', borderRadius: '8px', padding: '12px', color: 'white', fontSize: '14px', opacity: newVehicle.make ? 1 : 0.5 }}
               >
                 <option value="">Select Model</option>
                 {modelsForMake.map(m => <option key={m} value={m}>{m}</option>)}
               </select>
             </div>
-          </div>
 
-          {/* Stock # */}
-          <div style={{ marginBottom: '12px' }}>
-            <label style={{ display: 'block', fontSize: '12px', color: '#9ca3af', marginBottom: '4px' }}>Stock #</label>
-            <input 
-              placeholder="Auto-generated if empty"
-              value={newVehicle.stockNum}
-              onChange={e => setNewVehicle({...newVehicle, stockNum: e.target.value.toUpperCase()})}
-              style={{ width: '100%', backgroundColor: '#374151', border: '1px solid #4b5563', borderRadius: '8px', padding: '10px 12px', color: 'white', fontSize: '14px' }}
-            />
-          </div>
+            {/* Stock & Location */}
+            <div style={{ display: 'grid', gap: '8px', marginBottom: '16px' }}>
+              <input 
+                placeholder="Stock # (optional)"
+                value={newVehicle.stockNum}
+                onChange={e => setNewVehicle({...newVehicle, stockNum: e.target.value.toUpperCase()})}
+                style={{ backgroundColor: '#334155', border: 'none', borderRadius: '8px', padding: '12px', color: 'white', fontSize: '14px' }}
+              />
+              <select 
+                value={newVehicle.location}
+                onChange={e => setNewVehicle({...newVehicle, location: e.target.value})}
+                style={{ backgroundColor: '#334155', border: 'none', borderRadius: '8px', padding: '12px', color: 'white', fontSize: '14px' }}
+              >
+                {LOCATIONS.map(loc => <option key={loc} value={loc}>{loc}</option>)}
+              </select>
+            </div>
 
-          {/* Location */}
-          <div style={{ marginBottom: '16px' }}>
-            <label style={{ display: 'block', fontSize: '12px', color: '#9ca3af', marginBottom: '4px' }}>Location</label>
-            <select 
-              value={newVehicle.location}
-              onChange={e => setNewVehicle({...newVehicle, location: e.target.value})}
-              style={{ width: '100%', backgroundColor: '#374151', border: '1px solid #4b5563', borderRadius: '8px', padding: '10px 12px', color: 'white', fontSize: '14px' }}
+            <button 
+              onClick={handleAddVehicle}
+              style={{ width: '100%', backgroundColor: '#22c55e', color: 'white', fontWeight: '600', padding: '14px', borderRadius: '10px', border: 'none', fontSize: '16px' }}
             >
-              {LOCATIONS.map(loc => <option key={loc} value={loc}>{loc}</option>)}
-            </select>
+              Add Vehicle
+            </button>
           </div>
-
-          {/* Submit */}
-          <button 
-            onClick={handleAddVehicle}
-            style={{ width: '100%', backgroundColor: '#16a34a', color: 'white', fontWeight: '600', padding: '14px', borderRadius: '8px', border: 'none', fontSize: '15px' }}
-          >
-            Add to Inventory
-          </button>
         </div>
       )}
 
-      {/* Vehicle List */}
-      <div style={{ padding: '0 12px' }}>
-        {filteredVehicles.map(vehicle => (
-          <div key={vehicle.id} style={{ backgroundColor: '#1f2937', padding: '14px', borderRadius: '12px', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <div style={{ width: '4px', height: '50px', borderRadius: '2px', backgroundColor: getStatusColor(vehicle.status) }}></div>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: '600', fontSize: '15px' }}>{vehicle.year} {vehicle.make} {vehicle.model}</div>
-              <div style={{ fontSize: '12px', color: '#9ca3af' }}>#{vehicle.stockNum} • {vehicle.status}</div>
+      {/* Quick Actions Modal */}
+      {showActions && selectedVehicle && (
+        <div style={{ 
+          position: 'fixed', inset: 0, backgroundColor: '#00000080', zIndex: 200,
+          display: 'flex', alignItems: 'flex-end', justifyContent: 'center'
+        }}>
+          <div style={{ backgroundColor: '#1e293b', padding: '20px', borderRadius: '20px 20px 0 0', width: '100%', maxWidth: '500px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div>
+                <h2 style={{ fontSize: '18px', fontWeight: 'bold', margin: 0 }}>{selectedVehicle.year} {selectedVehicle.make} {selectedVehicle.model}</h2>
+                <p style={{ fontSize: '12px', color: '#94a3b8', margin: '4px 0 0' }}>#{selectedVehicle.stockNum} • {selectedVehicle.vin || 'No VIN'}</p>
+              </div>
+              <button onClick={() => setShowActions(false)} style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: '24px' }}>✕</button>
             </div>
-            <div style={{ textAlign: 'right' }}>
-              <div style={{ fontSize: '11px', color: '#9ca3af' }}>{vehicle.location}</div>
-              <div style={{ fontSize: '18px', fontWeight: 'bold', color: vehicle.age > 7 ? '#ef4444' : vehicle.age > 3 ? '#eab308' : 'white' }}>{vehicle.age}d</div>
+
+            {/* Current Status */}
+            <div style={{ backgroundColor: '#334155', padding: '12px', borderRadius: '10px', marginBottom: '16px' }}>
+              <div style={{ fontSize: '12px', color: '#94a3b8', marginBottom: '6px' }}>CURRENT STATUS</div>
+              <div style={{ fontSize: '14px', fontWeight: '600', color: getStageColor(selectedVehicle.status) }}>
+                {getStageIcon(selectedVehicle.status)} {selectedVehicle.status}
+              </div>
+              <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '4px' }}>📍 {selectedVehicle.location} • {selectedVehicle.age} days</div>
             </div>
+
+            {/* Move to Next Stage */}
+            <div style={{ marginBottom: '16px' }}>
+              <div style={{ fontSize: '12px', color: '#94a3b8', marginBottom: '8px' }}>MOVE TO STAGE</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '6px' }}>
+                {roleStages.map(stage => (
+                  <button
+                    key={stage}
+                    onClick={() => updateVehicleStatus(selectedVehicle.id, stage)}
+                    disabled={stage === selectedVehicle.status}
+                    style={{ 
+                      backgroundColor: stage === selectedVehicle.status ? '#22c55e' : '#334155',
+                      color: 'white', padding: '12px', borderRadius: '8px', border: 'none', 
+                      fontSize: '12px', fontWeight: '600', opacity: stage === selectedVehicle.status ? 1 : 0.8,
+                      textAlign: 'left'
+                    }}
+                  >
+                    {getStageIcon(stage)} {stage.split(' - ')[0]}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Move Location */}
+            <div style={{ marginBottom: '16px' }}>
+              <div style={{ fontSize: '12px', color: '#94a3b8', marginBottom: '8px' }}>MOVE LOCATION</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                {LOCATIONS.map(loc => (
+                  <button
+                    key={loc}
+                    onClick={() => updateVehicleLocation(selectedVehicle.id, loc)}
+                    style={{ 
+                      backgroundColor: loc === selectedVehicle.location ? '#3b82f6' : '#334155',
+                      color: 'white', padding: '8px 12px', borderRadius: '6px', border: 'none', 
+                      fontSize: '11px'
+                    }}
+                  >
+                    {loc}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Delete (Manager only) */}
+            {userRole === 'Manager' && (
+              <button 
+                onClick={() => deleteVehicle(selectedVehicle.id)}
+                style={{ width: '100%', backgroundColor: '#ef444420', color: '#ef4444', padding: '12px', borderRadius: '8px', border: '1px solid #ef4444', fontSize: '14px' }}
+              >
+                🗑️ Remove Vehicle
+              </button>
+            )}
           </div>
-        ))}
-        {filteredVehicles.length === 0 && (
-          <div style={{ textAlign: 'center', padding: '40px', color: '#6b7280' }}>No vehicles in this stage</div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
