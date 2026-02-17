@@ -1,34 +1,9 @@
 'use client';
 
-import { useState } from 'react';
-
-interface Vehicle {
-  id: string;
-  stockNum: string;
-  year: string;
-  make: string;
-  model: string;
-  vin: string;
-  status: string;
-  location: string;
-  age: number;
-  assignee?: string;
-  notes?: string;
-  updatedAt?: string;
-}
-
-const LOCATIONS = ['Front Lot', 'Rear Lot', 'Side Lot', 'Service Bay', 'Detail Shop', 'Auction Hold', 'Sold (Pending Pickup)', 'In Transit'];
-
-const STAGES = [
-  '1. Received - Inspection',
-  '2. Recon Assignment', 
-  '3. Service - Mechanical',
-  '4. Detail - Interior/Exterior',
-  '5. Final Quality Check',
-  '6. Photos & Marketing',
-  '7. Lot Ready - Front Line',
-  '8. Sold - Delivered'
-];
+import { useState, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
+import { useAuth } from '@/context/AuthContext';
+import { supabase, Vehicle, PipelineStage, StageCompletion, DropdownList } from '@/lib/supabase';
 
 const MAKES_MODELS: Record<string, string[]> = {
   'Chevrolet': ['Silverado 1500', 'Silverado 2500', 'Equinox', 'Traverse', 'Tahoe', 'Suburban', 'Colorado', 'Camaro', 'Malibu', 'Express 1500', 'Express 2500', 'Cruze', 'Trax', 'Blazer'],
@@ -64,58 +39,222 @@ const MAKES_MODELS: Record<string, string[]> = {
 const YEARS = Array.from({ length: 40 }, (_, i) => (2026 - i).toString());
 const COMMON_MAKES = Object.keys(MAKES_MODELS);
 
-// Role-based stage access
-const ROLE_STAGES: Record<string, string[]> = {
-  'Manager': STAGES,
-  'Service': STAGES.slice(2, 4), // Service stages
-  'Detail': STAGES.slice(3, 6),  // Detail stages  
-  'Sales': STAGES.slice(6, 8),   // Lot ready + Sold
-};
-
-const initialVehicles: Vehicle[] = [
-  { id: '1', stockNum: 'R1770526', year: '2021', make: 'Chevrolet', model: 'Equinox', vin: '', status: '3. Service - Mechanical', location: 'Service Bay', age: 5 },
-  { id: '2', stockNum: 'R1770527', year: '2023', make: 'Buick', model: 'Enclave', vin: '', status: '1. Received - Inspection', location: 'Front Lot', age: 1 },
-  { id: '3', stockNum: 'R1770528', year: '2020', make: 'Cadillac', model: 'Escalade ESV', vin: '', status: '7. Lot Ready - Front Line', location: 'Front Lot', age: 3 },
-  { id: '4', stockNum: 'R1770529', year: '2018', make: 'Chevrolet', model: 'Express 2500', vin: '', status: '4. Detail - Interior/Exterior', location: 'Detail Shop', age: 2 },
-  { id: '5', stockNum: 'R1770530', year: '2020', make: 'Chevrolet', model: 'Silverado 1500', vin: '', status: '5. Final Quality Check', location: 'Rear Lot', age: 1 },
-  { id: '6', stockNum: 'R1770531', year: '2022', make: 'Ford', model: 'F-150', vin: '', status: '8. Sold - Delivered', location: 'Sold (Pending Pickup)', age: 0 },
-  { id: '7', stockNum: 'R1770532', year: '2019', make: 'Toyota', model: 'Camry', vin: '', status: '6. Photos & Marketing', location: 'Front Lot', age: 4 },
-  { id: '8', stockNum: 'R1770533', year: '2021', make: 'Honda', model: 'Civic', vin: '', status: '2. Recon Assignment', location: 'Rear Lot', age: 1 },
-];
-
 export default function Home() {
-  const [vehicles, setVehicles] = useState<Vehicle[]>(initialVehicles);
-  const [userRole, setUserRole] = useState('Manager');
+  const { user, loading: authLoading, logout } = useAuth();
+  const router = useRouter();
+  
+  const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+  const [stages, setStages] = useState<PipelineStage[]>([]);
+  const [completions, setCompletions] = useState<StageCompletion[]>([]);
+  const [dropdownLists, setDropdownLists] = useState<DropdownList[]>([]);
+  const [loading, setLoading] = useState(true);
   const [selectedVehicle, setSelectedVehicle] = useState<Vehicle | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [showActions, setShowActions] = useState(false);
   const [isDecoding, setIsDecoding] = useState(false);
-  const [newVehicle, setNewVehicle] = useState({ year: '', make: '', model: '', vin: '', stockNum: '', location: 'Front Lot' });
-  
-  const roleStages = ROLE_STAGES[userRole] || STAGES;
-  
-  const getStageColor = (status: string) => {
-    const idx = STAGES.indexOf(status);
-    if (idx >= 6) return '#22c55e'; // Ready/Sold - green
-    if (idx >= 4) return '#3b82f6'; // Quality/Photos - blue
-    if (idx >= 2) return '#eab308'; // Service - yellow
-    return '#ef4444'; // New - red
+  const [newVehicle, setNewVehicle] = useState({ year: '', make: '', model: '', vin: '', stock_num: '' });
+
+  const getCurrentStatus = useCallback((vehicleId: string): string => {
+    const vehicleCompletions = completions.filter(c => c.vehicle_id === vehicleId);
+    const sortedStages = [...stages].sort((a, b) => a.order - b.order);
+    
+    for (const stage of sortedStages) {
+      const completion = vehicleCompletions.find(c => c.stage_id === stage.id);
+      if (!completion || !completion.completion_value || completion.cleared_at) {
+        return stage.stage_name;
+      }
+    }
+    return sortedStages.find(s => s.is_terminal)?.stage_name || 'Pending';
+  }, [stages, completions]);
+
+  const getAge = useCallback((inSystemDate: string): number => {
+    const inDate = new Date(inSystemDate);
+    const now = new Date();
+    return Math.floor((now.getTime() - inDate.getTime()) / (1000 * 60 * 60 * 24));
+  }, []);
+
+  useEffect(() => {
+    if (!authLoading && !user) {
+      router.push('/login');
+    }
+  }, [user, authLoading, router]);
+
+  useEffect(() => {
+    if (user) {
+      fetchData();
+    }
+  }, [user]);
+
+  async function fetchData() {
+    setLoading(true);
+    try {
+      const [vehiclesRes, stagesRes, completionsRes, dropdownsRes] = await Promise.all([
+        supabase.from('vehicles').select('*').eq('archived', false).order('created_at', { ascending: false }),
+        supabase.from('pipeline_stages').select('*').order('order'),
+        supabase.from('stage_completions').select('*'),
+        supabase.from('dropdown_lists').select('*')
+      ]);
+
+      if (vehiclesRes.data) setVehicles(vehiclesRes.data);
+      if (stagesRes.data) setStages(stagesRes.data);
+      if (completionsRes.data) setCompletions(completionsRes.data);
+      if (dropdownsRes.data) setDropdownLists(dropdownsRes.data);
+    } catch (error) {
+      console.error('Error fetching data:', error);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const getAccessibleStages = (): PipelineStage[] => {
+    if (!user) return stages;
+    if (user.roles.includes('Manager')) return stages;
+    return stages.filter(s => s.role === 'Manager' || user.roles.includes(s.role));
   };
 
-  const getStageIcon = (status: string) => {
-    const idx = STAGES.indexOf(status);
-    if (idx === 0) return '📥';
-    if (idx === 1) return '📋';
-    if (idx === 2) return '🔧';
-    if (idx === 3) return '✨';
-    if (idx === 4) return '✅';
-    if (idx === 5) return '📸';
-    if (idx === 6) return '🚗';
-    if (idx === 7) return '💰';
-    return '📌';
+  const getDropdownValues = (listName: string | null): string[] => {
+    if (!listName) return [];
+    const list = dropdownLists.find(d => d.list_name === listName);
+    return list?.values || [];
   };
 
-  // Decode model year from VIN 10th character (pos index 9)
+  async function logAudit(action: string, vehicleId: string, vehicleDesc: string, fieldName: string, oldValue: string, newValue: string) {
+    await supabase.from('audit_log').insert({
+      dealership_id: user?.dealership_id,
+      user_name: user?.name,
+      user_role: user?.roles[0],
+      action,
+      vehicle_id: vehicleId,
+      vehicle_desc: vehicleDesc,
+      field_name: fieldName,
+      old_value: oldValue,
+      new_value: newValue
+    });
+  }
+
+  async function handleAddVehicle() {
+    if (!newVehicle.year || !newVehicle.make || !newVehicle.model) {
+      alert('Please select year, make, and model');
+      return;
+    }
+
+    try {
+      const { data: existingVehicles } = await supabase
+        .from('vehicles')
+        .select('row_id')
+        .order('row_id', { ascending: false })
+        .limit(1);
+      
+      const nextRowId = existingVehicles && existingVehicles.length > 0 
+        ? Math.max(...existingVehicles.map(v => v.row_id)) + 1 
+        : 1;
+
+      const vehicleData = {
+        dealership_id: user?.dealership_id,
+        row_id: nextRowId,
+        stock_num: newVehicle.stock_num || `R${Date.now().toString().slice(-6)}`,
+        year: newVehicle.year,
+        make: newVehicle.make,
+        model: newVehicle.model,
+        vin: newVehicle.vin,
+        status: 'Pending',
+        age: 0,
+        in_system_date: new Date().toISOString(),
+        archived: false
+      };
+
+      const { data, error } = await supabase
+        .from('vehicles')
+        .insert(vehicleData)
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      await logAudit('CREATE', data.id, `${newVehicle.year} ${newVehicle.make} ${newVehicle.model}`, 'vehicle', '', 'created');
+      
+      setShowAddForm(false);
+      setNewVehicle({ year: '', make: '', model: '', vin: '', stock_num: '' });
+      fetchData();
+    } catch (error) {
+      console.error('Error adding vehicle:', error);
+      alert('Failed to add vehicle');
+    }
+  }
+
+  async function updateStageCompletion(vehicleId: string, stage: PipelineStage, value: string) {
+    try {
+      const vehicle = vehicles.find(v => v.id === vehicleId);
+      if (!vehicle) return;
+
+      const existingCompletion = completions.find(
+        c => c.vehicle_id === vehicleId && c.stage_id === stage.id
+      );
+
+      if (existingCompletion) {
+        if (value) {
+          const { error } = await supabase
+            .from('stage_completions')
+            .update({
+              completion_value: value,
+              completed_by: user?.name,
+              completed_at: new Date().toISOString(),
+              cleared_at: null
+            })
+            .eq('id', existingCompletion.id);
+
+          if (error) throw error;
+          await logAudit('UPDATE', vehicleId, `${vehicle.year} ${vehicle.make} ${vehicle.model}`, stage.completion_field, existingCompletion.completion_value || '', value);
+        } else {
+          const { error } = await supabase
+            .from('stage_completions')
+            .update({
+              completion_value: null,
+              completed_by: null,
+              completed_at: null,
+              cleared_at: new Date().toISOString()
+            })
+            .eq('id', existingCompletion.id);
+
+          if (error) throw error;
+          await logAudit('UPDATE', vehicleId, `${vehicle.year} ${vehicle.make} ${vehicle.model}`, stage.completion_field, existingCompletion.completion_value || '', '');
+        }
+      } else if (value) {
+        const { error } = await supabase
+          .from('stage_completions')
+          .insert({
+            vehicle_id: vehicleId,
+            stage_id: stage.id,
+            completion_value: value,
+            completed_by: user?.name,
+            completed_at: new Date().toISOString()
+          });
+
+        if (error) throw error;
+        await logAudit('UPDATE', vehicleId, `${vehicle.year} ${vehicle.make} ${vehicle.model}`, stage.completion_field, '', value);
+      }
+
+      fetchData();
+    } catch (error) {
+      console.error('Error updating completion:', error);
+    }
+  }
+
+  async function deleteVehicle(vehicleId: string) {
+    if (!confirm('Remove this vehicle from inventory?')) return;
+
+    try {
+      const vehicle = vehicles.find(v => v.id === vehicleId);
+      await supabase.from('vehicles').update({ archived: true }).eq('id', vehicleId);
+      await logAudit('DELETE', vehicleId, `${vehicle?.year} ${vehicle?.make} ${vehicle?.model}`, 'vehicle', 'active', 'archived');
+      setShowActions(false);
+      setSelectedVehicle(null);
+      fetchData();
+    } catch (error) {
+      console.error('Error deleting vehicle:', error);
+    }
+  }
+
   const decodeYearFromVin = (vin: string): string => {
     const code = vin.charAt(9).toUpperCase();
     const map: Record<string, number> = {
@@ -126,14 +265,10 @@ export default function Home() {
       'L': 2020, 'M': 2021, 'N': 2022, 'P': 2023, 'R': 2024,
       'S': 2025, 'T': 2026, 'V': 2027, 'W': 2028, 'X': 2029,
     };
-    // VIN 7th char determines 30-year cycle: if it's a letter, add 30
     const seventh = vin.charAt(6).toUpperCase();
     const base = map[code];
     if (base === undefined) return '';
-    // For 1980-2009 era vehicles, 7th char is typically a digit
-    // For 2010+ vehicles, 7th char can be a letter (alpha)
     if (base >= 2010 || /[A-Z]/.test(seventh)) return base.toString();
-    // If 7th is digit and base < 2010, it could be 1980-2009 range
     return (base - 30 >= 1980) ? (base - 30).toString() : base.toString();
   };
 
@@ -147,7 +282,6 @@ export default function Home() {
       const res = await fetch(`https://vpic.nhtsa.dot.gov/api/vehicles/decodevin/${newVehicle.vin}?format=json`);
       const data = await res.json();
       const vars = data.Results || [];
-      // NHTSA returns "0" or empty string for unknown values — filter those out
       const getVar = (name: string) => {
         const val = vars.find((v: any) => v.Variable === name)?.Value?.trim() || '';
         return (val && val !== '0' && val !== 'Not Applicable') ? val : '';
@@ -156,7 +290,6 @@ export default function Home() {
       const make = getVar('Make');
       const model = getVar('Model');
 
-      // Fallback: decode year from VIN 10th character if NHTSA didn't return it
       if (!year) {
         year = decodeYearFromVin(newVehicle.vin);
       }
@@ -175,7 +308,6 @@ export default function Home() {
         alert('Could not decode this VIN. Please enter year, make, and model manually.');
       }
     } catch (e) {
-      // Fallback to VIN character decode
       const year = decodeYearFromVin(newVehicle.vin);
       if (year) {
         setNewVehicle(prev => ({ ...prev, year }));
@@ -187,78 +319,69 @@ export default function Home() {
     setIsDecoding(false);
   };
 
-  const handleAddVehicle = () => {
-    if (!newVehicle.year || !newVehicle.make || !newVehicle.model) {
-      alert('Please select year, make, and model');
-      return;
-    }
-    const vehicle: Vehicle = {
-      id: Date.now().toString(),
-      stockNum: newVehicle.stockNum || `R${Date.now().toString().slice(-6)}`,
-      year: newVehicle.year,
-      make: newVehicle.make,
-      model: newVehicle.model,
-      vin: newVehicle.vin,
-      status: '1. Received - Inspection',
-      location: newVehicle.location,
-      age: 0,
-      updatedAt: new Date().toLocaleString()
-    };
-    setVehicles([vehicle, ...vehicles]);
-    setShowAddForm(false);
-    setNewVehicle({ year: '', make: '', model: '', vin: '', stockNum: '', location: 'Front Lot' });
+  const getStageColor = (status: string) => {
+    const stage = stages.find(s => s.stage_name === status);
+    return stage?.stage_color || '#ef4444';
   };
 
-  const updateVehicleStatus = (vehicleId: string, newStatus: string) => {
-    setVehicles(vehicles.map(v => 
-      v.id === vehicleId 
-        ? { ...v, status: newStatus, updatedAt: new Date().toLocaleString() }
-        : v
-    ));
-    setShowActions(false);
+  const isStageAccessible = (stageRole: string): boolean => {
+    if (!user) return false;
+    if (user.roles.includes('Manager')) return true;
+    return user.roles.includes(stageRole);
   };
 
-  const updateVehicleLocation = (vehicleId: string, newLocation: string) => {
-    setVehicles(vehicles.map(v => 
-      v.id === vehicleId 
-        ? { ...v, location: newLocation, updatedAt: new Date().toLocaleString() }
-        : v
-    ));
-    setShowActions(false);
+  const isStageCompleted = (vehicleId: string, stageId: string): boolean => {
+    const completion = completions.find(c => c.vehicle_id === vehicleId && c.stage_id === stageId);
+    return !!completion?.completion_value && !completion.cleared_at;
   };
 
-  const deleteVehicle = (vehicleId: string) => {
-    if (confirm('Remove this vehicle from inventory?')) {
-      setVehicles(vehicles.filter(v => v.id !== vehicleId));
-      setShowActions(false);
-      setSelectedVehicle(null);
-    }
+  const getCompletionValue = (vehicleId: string, stageId: string): string => {
+    const completion = completions.find(c => c.vehicle_id === vehicleId && c.stage_id === stageId);
+    return completion?.completion_value || '';
   };
+
+  if (authLoading || loading) {
+    return (
+      <div style={{ minHeight: '100vh', backgroundColor: '#0f172a', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ color: '#94a3b8' }}>Loading...</div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return null;
+  }
+
+  const readyCars = vehicles.filter(v => {
+    const status = getCurrentStatus(v.id);
+    return stages.find(s => s.stage_name === status)?.is_terminal;
+  });
+  const inProgressCars = vehicles.filter(v => {
+    const status = getCurrentStatus(v.id);
+    return !stages.find(s => s.stage_name === status)?.is_terminal;
+  });
 
   const modelsForMake = newVehicle.make ? (MAKES_MODELS[newVehicle.make] || []) : [];
-  const readyCars = vehicles.filter(v => v.status.includes('Lot Ready') || v.status.includes('Sold'));
-  const inProgressCars = vehicles.filter(v => !v.status.includes('Lot Ready') && !v.status.includes('Sold'));
 
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#0f172a', color: 'white', fontFamily: 'system-ui, sans-serif', paddingBottom: '80px' }}>
       
-      {/* Header */}
       <header style={{ backgroundColor: '#1e293b', padding: '16px', borderBottom: '1px solid #334155', position: 'sticky', top: 0, zIndex: 100 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
           <h1 style={{ fontSize: '24px', fontWeight: 'bold', margin: 0 }}>🚗 Car Manager</h1>
-          <select 
-            value={userRole}
-            onChange={e => setUserRole(e.target.value)}
-            style={{ backgroundColor: '#475569', border: 'none', borderRadius: '8px', padding: '6px 12px', color: 'white', fontSize: '13px' }}
-          >
-            <option value="Manager">👑 Manager</option>
-            <option value="Service">🔧 Service</option>
-            <option value="Detail">✨ Detail</option>
-            <option value="Sales">💰 Sales</option>
-          </select>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            {user.roles.includes('Manager') && (
+              <button onClick={() => router.push('/admin')} style={{ backgroundColor: '#475569', border: 'none', borderRadius: '8px', padding: '6px 12px', color: 'white', fontSize: '13px', cursor: 'pointer' }}>⚙️ Admin</button>
+            )}
+            <button onClick={() => router.push('/dashboard')} style={{ backgroundColor: '#475569', border: 'none', borderRadius: '8px', padding: '6px 12px', color: 'white', fontSize: '13px', cursor: 'pointer' }}>📊 Dashboard</button>
+            <button onClick={() => { logout(); router.push('/login'); }} style={{ backgroundColor: '#475569', border: 'none', borderRadius: '8px', padding: '6px 12px', color: 'white', fontSize: '13px', cursor: 'pointer' }}>🚪</button>
+          </div>
         </div>
         
-        {/* Quick Stats */}
+        <div style={{ fontSize: '12px', color: '#94a3b8', marginBottom: '12px' }}>
+          Logged in as: <span style={{ color: '#22c55e', fontWeight: 600 }}>{user.name}</span> ({user.roles.join(', ')})
+        </div>
+        
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '6px' }}>
           <div style={{ backgroundColor: '#334155', padding: '8px', borderRadius: '8px', textAlign: 'center' }}>
             <div style={{ fontSize: '18px', fontWeight: 'bold' }}>{vehicles.length}</div>
@@ -273,241 +396,160 @@ export default function Home() {
             <div style={{ fontSize: '9px', color: '#94a3b8' }}>IN PROG</div>
           </div>
           <div style={{ backgroundColor: '#ef444420', padding: '8px', borderRadius: '8px', textAlign: 'center' }}>
-            <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#ef4444' }}>{vehicles.filter(v => v.age > 7).length}</div>
+            <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#ef4444' }}>{vehicles.filter(v => getAge(v.in_system_date) > 7).length}</div>
             <div style={{ fontSize: '9px', color: '#94a3b8' }}>AGING</div>
           </div>
         </div>
       </header>
 
-      {/* Ready for Sale Section */}
       {readyCars.length > 0 && (
         <div style={{ padding: '12px' }}>
-          <h2 style={{ fontSize: '14px', color: '#22c55e', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-            🚗 READY TO SELL ({readyCars.length})
-          </h2>
+          <h2 style={{ fontSize: '14px', color: '#22c55e', marginBottom: '8px' }}>🚗 READY TO SELL ({readyCars.length})</h2>
           <div style={{ display: 'grid', gap: '6px' }}>
-            {readyCars.map(v => (
-              <div 
-                key={v.id}
-                onClick={() => { setSelectedVehicle(v); setShowActions(true); }}
-                style={{ backgroundColor: '#22c55e20', border: '1px solid #22c55e40', padding: '12px', borderRadius: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
-              >
-                <div>
-                  <div style={{ fontWeight: '600', fontSize: '15px' }}>{v.year} {v.make} {v.model}</div>
-                  <div style={{ fontSize: '11px', color: '#94a3b8' }}>#{v.stockNum} • {v.location}</div>
+            {readyCars.map(v => {
+              const status = getCurrentStatus(v.id);
+              return (
+                <div key={v.id} onClick={() => { setSelectedVehicle(v); setShowActions(true); }} style={{ backgroundColor: '#22c55e20', border: '1px solid #22c55e40', padding: '12px', borderRadius: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }}>
+                  <div>
+                    <div style={{ fontWeight: '600', fontSize: '15px' }}>{v.year} {v.make} {v.model}</div>
+                    <div style={{ fontSize: '11px', color: '#94a3b8' }}>#{v.stock_num} • VIN: {v.vin || 'N/A'}</div>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: '12px', color: '#22c55e', fontWeight: '600' }}>{status}</div>
+                  </div>
                 </div>
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: '12px', color: '#22c55e', fontWeight: '600' }}>{v.status}</div>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
 
-      {/* In Progress Section */}
       <div style={{ padding: '12px' }}>
-        <h2 style={{ fontSize: '14px', color: '#f59e0b', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-          🔄 IN PROGRESS ({inProgressCars.length})
-        </h2>
+        <h2 style={{ fontSize: '14px', color: '#f59e0b', marginBottom: '8px' }}>🔄 IN PROGRESS ({inProgressCars.length})</h2>
         <div style={{ display: 'grid', gap: '6px' }}>
-          {inProgressCars.map(v => (
-            <div 
-              key={v.id}
-              onClick={() => { setSelectedVehicle(v); setShowActions(true); }}
-              style={{ backgroundColor: '#1e293b', borderLeft: `4px solid ${getStageColor(v.status)}`, padding: '12px', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
-            >
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: '600', fontSize: '15px' }}>{v.year} {v.make} {v.model}</div>
-                <div style={{ fontSize: '11px', color: '#94a3b8' }}>#{v.stockNum} • {v.location}</div>
+          {inProgressCars.map(v => {
+            const status = getCurrentStatus(v.id);
+            const age = getAge(v.in_system_date);
+            const stageColor = getStageColor(status);
+            return (
+              <div key={v.id} onClick={() => { setSelectedVehicle(v); setShowActions(true); }} style={{ backgroundColor: '#1e293b', borderLeft: `4px solid ${stageColor}`, padding: '12px', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: '600', fontSize: '15px' }}>{v.year} {v.make} {v.model}</div>
+                  <div style={{ fontSize: '11px', color: '#94a3b8' }}>#{v.stock_num} • VIN: {v.vin || 'N/A'}</div>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: '12px', color: stageColor, fontWeight: '600' }}>{status.split(' - ')[0]}</div>
+                  <div style={{ fontSize: '10px', color: age > 7 ? '#ef4444' : '#94a3b8' }}>{age}d</div>
+                </div>
               </div>
-              <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: '12px', color: getStageColor(v.status), fontWeight: '600' }}>{getStageIcon(v.status)} {v.status.split(' - ')[0]}</div>
-                <div style={{ fontSize: '10px', color: v.age > 7 ? '#ef4444' : '#94a3b8' }}>{v.age}d</div>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 
-      {/* Floating Action Button */}
-      <button 
-        onClick={() => setShowAddForm(true)}
-        style={{ 
-          position: 'fixed', bottom: '24px', right: '24px', 
-          backgroundColor: '#2563eb', color: 'white', 
-          width: '60px', height: '60px', borderRadius: '30px', 
-          border: 'none', fontSize: '28px', boxShadow: '0 4px 20px rgba(37,99,235,0.4)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center'
-        }}
-      >
-        +
-      </button>
+      {vehicles.length === 0 && (
+        <div style={{ padding: '40px', textAlign: 'center', color: '#64748b' }}>
+          <div style={{ fontSize: '48px', marginBottom: '16px' }}>🚗</div>
+          <p>No vehicles yet. Click + to add one.</p>
+        </div>
+      )}
 
-      {/* Add Vehicle Modal */}
+      <button onClick={() => setShowAddForm(true)} style={{ position: 'fixed', bottom: '24px', right: '24px', backgroundColor: '#2563eb', color: 'white', width: '60px', height: '60px', borderRadius: '30px', border: 'none', fontSize: '28px', boxShadow: '0 4px 20px rgba(37,99,235,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>+</button>
+
       {showAddForm && (
-        <div style={{ 
-          position: 'fixed', inset: 0, backgroundColor: '#00000080', zIndex: 200,
-          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px'
-        }}>
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: '#00000080', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
           <div style={{ backgroundColor: '#1e293b', padding: '20px', borderRadius: '16px', width: '100%', maxWidth: '400px', maxHeight: '90vh', overflow: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
               <h2 style={{ fontSize: '18px', fontWeight: 'bold', margin: 0 }}>Add Vehicle</h2>
-              <button onClick={() => setShowAddForm(false)} style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: '24px' }}>✕</button>
+              <button onClick={() => setShowAddForm(false)} style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: '24px', cursor: 'pointer' }}>✕</button>
             </div>
             
-            {/* VIN */}
             <div style={{ marginBottom: '12px' }}>
               <label style={{ display: 'block', fontSize: '12px', color: '#94a3b8', marginBottom: '4px' }}>VIN (optional)</label>
               <div style={{ display: 'flex', gap: '8px' }}>
-                <input 
-                  placeholder="Enter VIN"
-                  value={newVehicle.vin}
-                  onChange={e => setNewVehicle({...newVehicle, vin: e.target.value.toUpperCase()})}
-                  maxLength={17}
-                  style={{ flex: 1, backgroundColor: '#334155', border: 'none', borderRadius: '8px', padding: '12px', color: 'white', fontSize: '14px' }}
-                />
-                <button 
-                  onClick={decodeVin}
-                  disabled={isDecoding}
-                  style={{ backgroundColor: '#7c3aed', color: 'white', padding: '12px 16px', borderRadius: '8px', border: 'none', fontWeight: '600' }}
-                >
-                  {isDecoding ? '...' : 'Decode'}
-                </button>
+                <input placeholder="Enter VIN" value={newVehicle.vin} onChange={e => setNewVehicle({...newVehicle, vin: e.target.value.toUpperCase()})} maxLength={17} style={{ flex: 1, backgroundColor: '#334155', border: 'none', borderRadius: '8px', padding: '12px', color: 'white', fontSize: '14px' }} />
+                <button onClick={decodeVin} disabled={isDecoding} style={{ backgroundColor: '#7c3aed', color: 'white', padding: '12px 16px', borderRadius: '8px', border: 'none', fontWeight: '600', cursor: 'pointer' }}>{isDecoding ? '...' : 'Decode'}</button>
               </div>
             </div>
 
-            {/* Year/Make/Model */}
             <div style={{ display: 'grid', gap: '8px', marginBottom: '12px' }}>
-              <select 
-                value={newVehicle.year}
-                onChange={e => setNewVehicle({...newVehicle, year: e.target.value, make: '', model: ''})}
-                style={{ backgroundColor: '#334155', border: 'none', borderRadius: '8px', padding: '12px', color: 'white', fontSize: '14px' }}
-              >
+              <select value={newVehicle.year} onChange={e => setNewVehicle({...newVehicle, year: e.target.value, make: '', model: ''})} style={{ backgroundColor: '#334155', border: 'none', borderRadius: '8px', padding: '12px', color: 'white', fontSize: '14px' }}>
                 <option value="">Select Year</option>
                 {YEARS.map(y => <option key={y} value={y}>{y}</option>)}
               </select>
-              <select 
-                value={newVehicle.make}
-                onChange={e => setNewVehicle({...newVehicle, make: e.target.value, model: ''})}
-                disabled={!newVehicle.year}
-                style={{ backgroundColor: '#334155', border: 'none', borderRadius: '8px', padding: '12px', color: 'white', fontSize: '14px', opacity: newVehicle.year ? 1 : 0.5 }}
-              >
+              <select value={newVehicle.make} onChange={e => setNewVehicle({...newVehicle, make: e.target.value, model: ''})} disabled={!newVehicle.year} style={{ backgroundColor: '#334155', border: 'none', borderRadius: '8px', padding: '12px', color: 'white', fontSize: '14px', opacity: newVehicle.year ? 1 : 0.5 }}>
                 <option value="">Select Make</option>
                 {COMMON_MAKES.map(m => <option key={m} value={m}>{m}</option>)}
               </select>
-              <select 
-                value={newVehicle.model}
-                onChange={e => setNewVehicle({...newVehicle, model: e.target.value})}
-                disabled={!newVehicle.make}
-                style={{ backgroundColor: '#334155', border: 'none', borderRadius: '8px', padding: '12px', color: 'white', fontSize: '14px', opacity: newVehicle.make ? 1 : 0.5 }}
-              >
+              <select value={newVehicle.model} onChange={e => setNewVehicle({...newVehicle, model: e.target.value})} disabled={!newVehicle.make} style={{ backgroundColor: '#334155', border: 'none', borderRadius: '8px', padding: '12px', color: 'white', fontSize: '14px', opacity: newVehicle.make ? 1 : 0.5 }}>
                 <option value="">Select Model</option>
                 {modelsForMake.map(m => <option key={m} value={m}>{m}</option>)}
               </select>
             </div>
 
-            {/* Stock & Location */}
-            <div style={{ display: 'grid', gap: '8px', marginBottom: '16px' }}>
-              <input 
-                placeholder="Stock # (optional)"
-                value={newVehicle.stockNum}
-                onChange={e => setNewVehicle({...newVehicle, stockNum: e.target.value.toUpperCase()})}
-                style={{ backgroundColor: '#334155', border: 'none', borderRadius: '8px', padding: '12px', color: 'white', fontSize: '14px' }}
-              />
-              <select 
-                value={newVehicle.location}
-                onChange={e => setNewVehicle({...newVehicle, location: e.target.value})}
-                style={{ backgroundColor: '#334155', border: 'none', borderRadius: '8px', padding: '12px', color: 'white', fontSize: '14px' }}
-              >
-                {LOCATIONS.map(loc => <option key={loc} value={loc}>{loc}</option>)}
-              </select>
+            <div style={{ marginBottom: '16px' }}>
+              <input placeholder="Stock # (optional)" value={newVehicle.stock_num} onChange={e => setNewVehicle({...newVehicle, stock_num: e.target.value.toUpperCase()})} style={{ width: '100%', backgroundColor: '#334155', border: 'none', borderRadius: '8px', padding: '12px', color: 'white', fontSize: '14px' }} />
             </div>
 
-            <button 
-              onClick={handleAddVehicle}
-              style={{ width: '100%', backgroundColor: '#22c55e', color: 'white', fontWeight: '600', padding: '14px', borderRadius: '10px', border: 'none', fontSize: '16px' }}
-            >
-              Add Vehicle
-            </button>
+            <button onClick={handleAddVehicle} style={{ width: '100%', backgroundColor: '#22c55e', color: 'white', fontWeight: '600', padding: '14px', borderRadius: '10px', border: 'none', fontSize: '16px', cursor: 'pointer' }}>Add Vehicle</button>
           </div>
         </div>
       )}
 
-      {/* Quick Actions Modal */}
       {showActions && selectedVehicle && (
-        <div style={{ 
-          position: 'fixed', inset: 0, backgroundColor: '#00000080', zIndex: 200,
-          display: 'flex', alignItems: 'flex-end', justifyContent: 'center'
-        }}>
-          <div style={{ backgroundColor: '#1e293b', padding: '20px', borderRadius: '20px 20px 0 0', width: '100%', maxWidth: '500px' }}>
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: '#00000080', zIndex: 200, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+          <div style={{ backgroundColor: '#1e293b', padding: '20px', borderRadius: '20px 20px 0 0', width: '100%', maxWidth: '500px', maxHeight: '90vh', overflow: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
               <div>
                 <h2 style={{ fontSize: '18px', fontWeight: 'bold', margin: 0 }}>{selectedVehicle.year} {selectedVehicle.make} {selectedVehicle.model}</h2>
-                <p style={{ fontSize: '12px', color: '#94a3b8', margin: '4px 0 0' }}>#{selectedVehicle.stockNum} • {selectedVehicle.vin || 'No VIN'}</p>
+                <p style={{ fontSize: '12px', color: '#94a3b8', margin: '4px 0 0' }}>#{selectedVehicle.stock_num} • VIN: {selectedVehicle.vin || 'No VIN'}</p>
               </div>
-              <button onClick={() => setShowActions(false)} style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: '24px' }}>✕</button>
+              <button onClick={() => setShowActions(false)} style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: '24px', cursor: 'pointer' }}>✕</button>
             </div>
 
-            {/* Current Status */}
             <div style={{ backgroundColor: '#334155', padding: '12px', borderRadius: '10px', marginBottom: '16px' }}>
               <div style={{ fontSize: '12px', color: '#94a3b8', marginBottom: '6px' }}>CURRENT STATUS</div>
-              <div style={{ fontSize: '14px', fontWeight: '600', color: getStageColor(selectedVehicle.status) }}>
-                {getStageIcon(selectedVehicle.status)} {selectedVehicle.status}
-              </div>
-              <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '4px' }}>📍 {selectedVehicle.location} • {selectedVehicle.age} days</div>
+              <div style={{ fontSize: '14px', fontWeight: '600', color: getStageColor(getCurrentStatus(selectedVehicle.id)) }}>{getCurrentStatus(selectedVehicle.id)}</div>
+              <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '4px' }}>📅 In system: {getAge(selectedVehicle.in_system_date)} days</div>
             </div>
 
-            {/* Move to Next Stage */}
             <div style={{ marginBottom: '16px' }}>
-              <div style={{ fontSize: '12px', color: '#94a3b8', marginBottom: '8px' }}>MOVE TO STAGE</div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '6px' }}>
-                {roleStages.map(stage => (
-                  <button
-                    key={stage}
-                    onClick={() => updateVehicleStatus(selectedVehicle.id, stage)}
-                    disabled={stage === selectedVehicle.status}
-                    style={{ 
-                      backgroundColor: stage === selectedVehicle.status ? '#22c55e' : '#334155',
-                      color: 'white', padding: '12px', borderRadius: '8px', border: 'none', 
-                      fontSize: '12px', fontWeight: '600', opacity: stage === selectedVehicle.status ? 1 : 0.8,
-                      textAlign: 'left'
-                    }}
-                  >
-                    {getStageIcon(stage)} {stage.split(' - ')[0]}
-                  </button>
-                ))}
+              <div style={{ fontSize: '12px', color: '#94a3b8', marginBottom: '8px' }}>PIPELINE</div>
+              <div style={{ display: 'grid', gap: '8px' }}>
+                {stages.sort((a, b) => a.order - b.order).map(stage => {
+                  const isAccessible = isStageAccessible(stage.role);
+                  const isCompleted = isStageCompleted(selectedVehicle.id, stage.id);
+                  const currentValue = getCompletionValue(selectedVehicle.id, stage.id);
+                  const dropdownValues = getDropdownValues(stage.list_name);
+
+                  if (!isAccessible) return null;
+
+                  return (
+                    <div key={stage.id} style={{ backgroundColor: isCompleted ? '#22c55e20' : '#334155', padding: '12px', borderRadius: '8px', border: isCompleted ? '1px solid #22c55e40' : '1px solid transparent' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                        <span style={{ fontSize: '13px', fontWeight: '600', color: stage.stage_color }}>{stage.stage_name}</span>
+                        <span style={{ fontSize: '10px', color: '#64748b' }}>{stage.role}</span>
+                      </div>
+                      
+                      {stage.completion_type === 'checkbox' ? (
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                          <input type="checkbox" checked={isCompleted} onChange={e => updateStageCompletion(selectedVehicle.id, stage, e.target.checked ? 'true' : '')} style={{ width: '20px', height: '20px', accentColor: '#22c55e' }} />
+                          <span style={{ fontSize: '12px', color: isCompleted ? '#22c55e' : '#94a3b8' }}>{isCompleted ? 'Completed' : 'Mark complete'}</span>
+                        </label>
+                      ) : (
+                        <select value={currentValue} onChange={e => updateStageCompletion(selectedVehicle.id, stage, e.target.value)} style={{ width: '100%', backgroundColor: '#1e293b', border: 'none', borderRadius: '6px', padding: '8px', color: 'white', fontSize: '13px' }}>
+                          <option value="">Select...</option>
+                          {dropdownValues.map(v => <option key={v} value={v}>{v}</option>)}
+                        </select>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
-            {/* Move Location */}
-            <div style={{ marginBottom: '16px' }}>
-              <div style={{ fontSize: '12px', color: '#94a3b8', marginBottom: '8px' }}>MOVE LOCATION</div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                {LOCATIONS.map(loc => (
-                  <button
-                    key={loc}
-                    onClick={() => updateVehicleLocation(selectedVehicle.id, loc)}
-                    style={{ 
-                      backgroundColor: loc === selectedVehicle.location ? '#3b82f6' : '#334155',
-                      color: 'white', padding: '8px 12px', borderRadius: '6px', border: 'none', 
-                      fontSize: '11px'
-                    }}
-                  >
-                    {loc}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Delete (Manager only) */}
-            {userRole === 'Manager' && (
-              <button 
-                onClick={() => deleteVehicle(selectedVehicle.id)}
-                style={{ width: '100%', backgroundColor: '#ef444420', color: '#ef4444', padding: '12px', borderRadius: '8px', border: '1px solid #ef4444', fontSize: '14px' }}
-              >
-                🗑️ Remove Vehicle
-              </button>
+            {user.roles.includes('Manager') && (
+              <button onClick={() => deleteVehicle(selectedVehicle.id)} style={{ width: '100%', backgroundColor: '#ef444420', color: '#ef4444', padding: '12px', borderRadius: '8px', border: '1px solid #ef4444', fontSize: '14px', cursor: 'pointer' }}>🗑️ Remove Vehicle</button>
             )}
           </div>
         </div>
