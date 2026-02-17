@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
-import { supabase, Vehicle, PipelineStage, StageCompletion, DropdownList } from '@/lib/supabase';
+import { supabase, Vehicle, PipelineStage, StageCompletion, DropdownList, User } from '@/lib/supabase';
 
 const MAKES_MODELS: Record<string, string[]> = {
   'Chevrolet': ['Silverado 1500', 'Silverado 2500', 'Equinox', 'Traverse', 'Tahoe', 'Suburban', 'Colorado', 'Camaro', 'Malibu', 'Express 1500', 'Express 2500', 'Cruze', 'Trax', 'Blazer'],
@@ -47,6 +47,7 @@ export default function Home() {
   const [stages, setStages] = useState<PipelineStage[]>([]);
   const [completions, setCompletions] = useState<StageCompletion[]>([]);
   const [dropdownLists, setDropdownLists] = useState<DropdownList[]>([]);
+  const [allUsers, setAllUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedVehicle, setSelectedVehicle] = useState<Vehicle | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
@@ -88,17 +89,19 @@ export default function Home() {
   async function fetchData() {
     setLoading(true);
     try {
-      const [vehiclesRes, stagesRes, completionsRes, dropdownsRes] = await Promise.all([
+      const [vehiclesRes, stagesRes, completionsRes, dropdownsRes, usersRes] = await Promise.all([
         supabase.from('vehicles').select('*').eq('archived', false).order('created_at', { ascending: false }),
         supabase.from('pipeline_stages').select('*').order('order'),
         supabase.from('stage_completions').select('*'),
-        supabase.from('dropdown_lists').select('*')
+        supabase.from('dropdown_lists').select('*'),
+        supabase.from('users').select('*').eq('active', true)
       ]);
 
       if (vehiclesRes.data) setVehicles(vehiclesRes.data);
       if (stagesRes.data) setStages(stagesRes.data);
       if (completionsRes.data) setCompletions(completionsRes.data);
       if (dropdownsRes.data) setDropdownLists(dropdownsRes.data);
+      if (usersRes.data) setAllUsers(usersRes.data);
     } catch (error) {
       console.error('Error fetching data:', error);
     } finally {
@@ -112,8 +115,28 @@ export default function Home() {
     return stages.filter(s => s.role === 'Manager' || user.roles.includes(s.role));
   };
 
-  const getDropdownValues = (listName: string | null): string[] => {
+  const getDropdownValues = (listName: string | null, stageRole: string): string[] => {
     if (!listName) return [];
+    
+    // Use real users for role-based dropdowns
+    const roleBasedLists = ['Detailers', 'Advisors', 'Technicians'];
+    if (roleBasedLists.includes(listName)) {
+      // Map list names to roles
+      const roleMap: { [key: string]: string } = {
+        'Detailers': 'Detail',
+        'Advisors': 'Service', 
+        'Technicians': 'Service'
+      };
+      
+      const targetRole = roleMap[listName];
+      if (targetRole) {
+        return allUsers
+          .filter(u => u.roles.includes(targetRole))
+          .map(u => u.name);
+      }
+    }
+    
+    // Fall back to static dropdown lists
     const list = dropdownLists.find(d => d.list_name === listName);
     return list?.values || [];
   };
@@ -520,7 +543,8 @@ export default function Home() {
                   const isAccessible = isStageAccessible(stage.role);
                   const isCompleted = isStageCompleted(selectedVehicle.id, stage.id);
                   const currentValue = getCompletionValue(selectedVehicle.id, stage.id);
-                  const dropdownValues = getDropdownValues(stage.list_name);
+                  const dropdownValues = getDropdownValues(stage.list_name, stage.role);
+                  const completion = completions.find(c => c.vehicle_id === selectedVehicle.id && c.stage_id === stage.id);
 
                   if (!isAccessible) return null;
 
@@ -532,15 +556,29 @@ export default function Home() {
                       </div>
                       
                       {stage.completion_type === 'checkbox' ? (
-                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-                          <input type="checkbox" checked={isCompleted} onChange={e => updateStageCompletion(selectedVehicle.id, stage, e.target.checked ? 'true' : '')} style={{ width: '20px', height: '20px', accentColor: '#22c55e' }} />
-                          <span style={{ fontSize: '12px', color: isCompleted ? '#22c55e' : '#94a3b8' }}>{isCompleted ? 'Completed' : 'Mark complete'}</span>
-                        </label>
+                        <div>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                            <input type="checkbox" checked={isCompleted} onChange={e => updateStageCompletion(selectedVehicle.id, stage, e.target.checked ? user.name : '')} style={{ width: '20px', height: '20px', accentColor: '#22c55e' }} />
+                            <span style={{ fontSize: '12px', color: isCompleted ? '#22c55e' : '#94a3b8' }}>{isCompleted ? 'Completed' : 'Mark complete'}</span>
+                          </label>
+                          {completion && completion.completed_at && (
+                            <div style={{ fontSize: '10px', color: '#64748b', marginTop: '4px' }}>
+                              ✓ {completion.completed_by} • {new Date(completion.completed_at).toLocaleDateString()} {new Date(completion.completed_at).toLocaleTimeString()}
+                            </div>
+                          )}
+                        </div>
                       ) : (
-                        <select value={currentValue} onChange={e => updateStageCompletion(selectedVehicle.id, stage, e.target.value)} style={{ width: '100%', backgroundColor: '#1e293b', border: 'none', borderRadius: '6px', padding: '8px', color: 'white', fontSize: '13px' }}>
-                          <option value="">Select...</option>
-                          {dropdownValues.map(v => <option key={v} value={v}>{v}</option>)}
-                        </select>
+                        <div>
+                          <select value={currentValue} onChange={e => updateStageCompletion(selectedVehicle.id, stage, e.target.value)} style={{ width: '100%', backgroundColor: '#1e293b', border: 'none', borderRadius: '6px', padding: '8px', color: 'white', fontSize: '13px' }}>
+                            <option value="">Select...</option>
+                            {dropdownValues.map(v => <option key={v} value={v}>{v}</option>)}
+                          </select>
+                          {completion && completion.completed_at && currentValue && (
+                            <div style={{ fontSize: '10px', color: '#64748b', marginTop: '4px' }}>
+                              ✓ {completion.completed_by} • {new Date(completion.completed_at).toLocaleDateString()} {new Date(completion.completed_at).toLocaleTimeString()}
+                            </div>
+                          )}
+                        </div>
                       )}
                     </div>
                   );
