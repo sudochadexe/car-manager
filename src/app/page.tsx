@@ -5,39 +5,10 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import { supabase, Vehicle, PipelineStage, StageCompletion, DropdownList, User } from '@/lib/supabase';
 
-const MAKES_MODELS: Record<string, string[]> = {
-  'Chevrolet': ['Silverado 1500', 'Silverado 2500', 'Equinox', 'Traverse', 'Tahoe', 'Suburban', 'Colorado', 'Camaro', 'Malibu', 'Express 1500', 'Express 2500', 'Cruze', 'Trax', 'Blazer'],
-  'Ford': ['F-150', 'F-250', 'F-350', 'Explorer', 'Expedition', 'Escape', 'Edge', 'Mustang', 'Ranger', 'Bronco', 'Transit 150', 'Transit 250', 'Focus', 'Fusion'],
-  'Toyota': ['Camry', 'Corolla', 'RAV4', 'Highlander', '4Runner', 'Tacoma', 'Tundra', 'Prius', 'Sienna', 'Sequoia'],
-  'Honda': ['Civic', 'Accord', 'CR-V', 'Pilot', 'HR-V', 'Odyssey', 'Ridgeline', 'Passport'],
-  'Nissan': ['Altima', 'Rogue', 'Sentra', 'Pathfinder', 'Armada', 'Frontier', 'Murano', 'Kicks'],
-  'GMC': ['Sierra 1500', 'Sierra 2500', 'Acadia', 'Terrain', 'Yukon', 'Yukon XL', 'Canyon'],
-  'Buick': ['Enclave', 'Encore', 'Envision', 'Regal', 'LaCrosse'],
-  'Cadillac': ['Escalade', 'Escalade ESV', 'XT4', 'XT5', 'XT6', 'CT5', 'SRX'],
-  'Dodge': ['Charger', 'Challenger', 'Durango', 'Journey', 'Grand Caravan', 'Hornet'],
-  'Jeep': ['Wrangler', 'Grand Cherokee', 'Cherokee', 'Compass', 'Renegade', 'Gladiator'],
-  'Ram': ['1500', '2500', '3500', 'ProMaster'],
-  'Mazda': ['CX-5', 'CX-50', 'CX-9', 'Mazda3', 'Mazda6', 'CX-30'],
-  'Subaru': ['Outback', 'Forester', 'Crosstrek', 'Impreza', 'Legacy', 'Ascent'],
-  'Volkswagen': ['Tiguan', 'Atlas', 'Jetta', 'Passat', 'Golf', 'Taos'],
-  'Hyundai': ['Tucson', 'Santa Fe', 'Elantra', 'Sonata', 'Palisade', 'Venue', 'Kona'],
-  'Kia': ['Sportage', 'Telluride', 'Sorento', 'Forte', 'K5', 'Seltos', 'Carnival'],
-  'Lexus': ['RX', 'ES', 'NX', 'GX', 'LX', 'IS', 'UX'],
-  'BMW': ['X3', 'X5', 'X7', 'X1', '3 Series', '5 Series'],
-  'Mercedes-Benz': ['GLC', 'GLE', 'GLS', 'C-Class', 'E-Class', 'S-Class'],
-  'Audi': ['Q5', 'Q7', 'Q3', 'A4', 'A6', 'A3'],
-  'Tesla': ['Model 3', 'Model Y', 'Model S', 'Model X', 'Cybertruck'],
-  'Chrysler': ['Pacifica', '300', 'Voyager'],
-  'Lincoln': ['Aviator', 'Navigator', 'Corsair', 'Nautilus', 'MKZ'],
-  'Acura': ['MDX', 'RDX', 'TLX', 'ILX'],
-  'Infiniti': ['QX60', 'QX80', 'QX50', 'Q50', 'Q60'],
-  'Genesis': ['GV80', 'GV70', 'G80', 'G70'],
-  'Mitsubishi': ['Outlander', 'Eclipse Cross', 'Mirage'],
-  'Other': ['Other']
-};
-
 const YEARS = Array.from({ length: 40 }, (_, i) => (2026 - i).toString());
-const COMMON_MAKES = Object.keys(MAKES_MODELS);
+
+// Cache for CSV data by year
+const csvCache: Record<string, { makes: string[], modelsByMake: Record<string, string[]> }> = {};
 
 export default function Home() {
   const { user, loading: authLoading, logout } = useAuth();
@@ -54,6 +25,147 @@ export default function Home() {
   const [showActions, setShowActions] = useState(false);
   const [isDecoding, setIsDecoding] = useState(false);
   const [newVehicle, setNewVehicle] = useState({ year: '', make: '', model: '', vin: '', stock_num: '' });
+  const [availableMakes, setAvailableMakes] = useState<string[]>([]);
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [isLoadingMakes, setIsLoadingMakes] = useState(false);
+  const [isLoadingModels, setIsLoadingModels] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+
+  // Fetch makes for a given year
+  const fetchMakesForYear = async (year: string) => {
+    if (!year) {
+      setAvailableMakes([]);
+      setAvailableModels([]);
+      return;
+    }
+
+    // Check cache first
+    if (csvCache[year]) {
+      setAvailableMakes(csvCache[year].makes);
+      return;
+    }
+
+    setIsLoadingMakes(true);
+    setFetchError(null);
+    try {
+      const response = await fetch(`https://raw.githubusercontent.com/abhionlyone/us-car-models-data/master/${year}.csv`);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch data for ${year}`);
+      }
+      const text = await response.text();
+      const lines = text.trim().split('\n');
+      
+      // Skip header row (first line)
+      const makesSet = new Set<string>();
+      const modelsByMake: Record<string, Set<string>> = {};
+
+      for (let i = 1; i < lines.length; i++) {
+        // Parse CSV line: Year,Make,Model,"[""Category""]"
+        const match = lines[i].match(/^(\d+),([^,]+),([^,]+),/);
+        if (match) {
+          const [, , make, model] = match;
+          const trimmedMake = make.trim();
+          const trimmedModel = model.trim();
+          makesSet.add(trimmedMake);
+          if (!modelsByMake[trimmedMake]) {
+            modelsByMake[trimmedMake] = new Set();
+          }
+          modelsByMake[trimmedMake].add(trimmedModel);
+        }
+      }
+
+      const makes = Array.from(makesSet).sort();
+      const modelsRecord: Record<string, string[]> = {};
+      for (const make in modelsByMake) {
+        modelsRecord[make] = Array.from(modelsByMake[make]).sort();
+      }
+
+      // Cache the result
+      csvCache[year] = { makes, modelsByMake: modelsRecord };
+      setAvailableMakes(makes);
+    } catch (error) {
+      console.error('Error fetching vehicle data:', error);
+      setFetchError(`Could not load vehicle data for ${year}. Please try again.`);
+      setAvailableMakes([]);
+    } finally {
+      setIsLoadingMakes(false);
+    }
+  };
+
+  // Fetch models for a given year and make
+  const fetchModelsForMake = async (year: string, make: string) => {
+    if (!year || !make) {
+      setAvailableModels([]);
+      return;
+    }
+
+    // Check cache first
+    if (csvCache[year] && csvCache[year].modelsByMake[make]) {
+      setAvailableModels(csvCache[year].modelsByMake[make]);
+      return;
+    }
+
+    setIsLoadingModels(true);
+    try {
+      // If not in cache, we need to fetch and parse the CSV again
+      // This shouldn't happen often since we cache on year selection
+      const response = await fetch(`https://raw.githubusercontent.com/abhionlyone/us-car-models-data/master/${year}.csv`);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch data for ${year}`);
+      }
+      const text = await response.text();
+      const lines = text.trim().split('\n');
+      
+      const modelsSet = new Set<string>();
+
+      for (let i = 1; i < lines.length; i++) {
+        const match = lines[i].match(/^(\d+),([^,]+),([^,]+),/);
+        if (match) {
+          const [, , makeTrimmed, model] = match;
+          if (makeTrimmed.trim() === make) {
+            modelsSet.add(model.trim());
+          }
+        }
+      }
+
+      const models = Array.from(modelsSet).sort();
+      
+      // Update cache
+      if (!csvCache[year]) {
+        csvCache[year] = { makes: [], modelsByMake: {} };
+      }
+      csvCache[year].modelsByMake[make] = models;
+      
+      setAvailableModels(models);
+    } catch (error) {
+      console.error('Error fetching models:', error);
+      setAvailableModels([]);
+    } finally {
+      setIsLoadingModels(false);
+    }
+  };
+
+  // Handle year change
+  const handleYearChange = (year: string) => {
+    setNewVehicle({ ...newVehicle, year, make: '', model: '' });
+    setAvailableModels([]);
+    if (year) {
+      fetchMakesForYear(year);
+    } else {
+      setAvailableMakes([]);
+    }
+  };
+
+  // Handle make change
+  const handleMakeChange = (make: string) => {
+    const year = newVehicle.year;
+    setNewVehicle({ ...newVehicle, make, model: '' });
+    if (year && make) {
+      fetchModelsForMake(year, make);
+    } else {
+      setAvailableModels([]);
+    }
+  };
 
   const getCurrentStatus = useCallback((vehicleId: string): string => {
     const vehicleCompletions = completions.filter(c => c.vehicle_id === vehicleId);
@@ -384,8 +496,6 @@ export default function Home() {
     return !stages.find(s => s.stage_name === status)?.is_terminal;
   });
 
-  const modelsForMake = newVehicle.make ? (MAKES_MODELS[newVehicle.make] || []) : [];
-
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#0f172a', color: 'white', fontFamily: 'system-ui, sans-serif', paddingBottom: '80px' }}>
       
@@ -495,18 +605,23 @@ export default function Home() {
               </div>
             </div>
 
+            {fetchError && (
+              <div style={{ backgroundColor: '#ef444420', color: '#ef4444', padding: '8px 12px', borderRadius: '8px', marginBottom: '12px', fontSize: '12px' }}>
+                {fetchError}
+              </div>
+            )}
             <div style={{ display: 'grid', gap: '8px', marginBottom: '12px' }}>
-              <select value={newVehicle.year} onChange={e => setNewVehicle({...newVehicle, year: e.target.value, make: '', model: ''})} style={{ backgroundColor: '#334155', border: 'none', borderRadius: '8px', padding: '12px', color: 'white', fontSize: '14px' }}>
+              <select value={newVehicle.year} onChange={e => handleYearChange(e.target.value)} style={{ backgroundColor: '#334155', border: 'none', borderRadius: '8px', padding: '12px', color: 'white', fontSize: '14px' }}>
                 <option value="">Select Year</option>
                 {YEARS.map(y => <option key={y} value={y}>{y}</option>)}
               </select>
-              <select value={newVehicle.make} onChange={e => setNewVehicle({...newVehicle, make: e.target.value, model: ''})} disabled={!newVehicle.year} style={{ backgroundColor: '#334155', border: 'none', borderRadius: '8px', padding: '12px', color: 'white', fontSize: '14px', opacity: newVehicle.year ? 1 : 0.5 }}>
-                <option value="">Select Make</option>
-                {COMMON_MAKES.map(m => <option key={m} value={m}>{m}</option>)}
+              <select value={newVehicle.make} onChange={e => handleMakeChange(e.target.value)} disabled={!newVehicle.year || isLoadingMakes} style={{ backgroundColor: '#334155', border: 'none', borderRadius: '8px', padding: '12px', color: 'white', fontSize: '14px', opacity: newVehicle.year && !isLoadingMakes ? 1 : 0.5 }}>
+                <option value="">{isLoadingMakes ? 'Loading makes...' : 'Select Make'}</option>
+                {availableMakes.map(m => <option key={m} value={m}>{m}</option>)}
               </select>
-              <select value={newVehicle.model} onChange={e => setNewVehicle({...newVehicle, model: e.target.value})} disabled={!newVehicle.make} style={{ backgroundColor: '#334155', border: 'none', borderRadius: '8px', padding: '12px', color: 'white', fontSize: '14px', opacity: newVehicle.make ? 1 : 0.5 }}>
-                <option value="">Select Model</option>
-                {modelsForMake.map(m => <option key={m} value={m}>{m}</option>)}
+              <select value={newVehicle.model} onChange={e => setNewVehicle({...newVehicle, model: e.target.value})} disabled={!newVehicle.make || isLoadingModels} style={{ backgroundColor: '#334155', border: 'none', borderRadius: '8px', padding: '12px', color: 'white', fontSize: '14px', opacity: newVehicle.make && !isLoadingModels ? 1 : 0.5 }}>
+                <option value="">{isLoadingModels ? 'Loading models...' : 'Select Model'}</option>
+                {availableModels.map(m => <option key={m} value={m}>{m}</option>)}
               </select>
             </div>
 
