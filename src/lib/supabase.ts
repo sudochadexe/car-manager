@@ -19,6 +19,7 @@ export interface User {
   pin: string;
   roles: string[];
   active: boolean;
+  dashboard_view?: 'overview' | 'department';
   created_at: string;
 }
 

@@ -31,6 +31,29 @@ export default function Home() {
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
 
+  // Search & filter state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [filterDepartment, setFilterDepartment] = useState<string>('all');
+  
+  // Dashboard view mode (overview or department)
+  const [dashboardView, setDashboardView] = useState<'overview' | 'department'>('overview');
+
+  // Load user's dashboard view preference
+  useEffect(() => {
+    if (user) {
+      // Only managers can use department view
+      if (user.roles.includes('Manager') && user.dashboard_view === 'department') {
+        setDashboardView('department');
+      } else {
+        setDashboardView('overview');
+      }
+    }
+  }, [user]);
+
+  // Get unique departments from pipeline stages
+  const departments = [...new Set(stages.map(s => s.role))].filter(Boolean);
+
   // Fetch makes for a given year
   const fetchMakesForYear = async (year: string) => {
     if (!year) {
@@ -496,6 +519,85 @@ export default function Home() {
     return !stages.find(s => s.stage_name === status)?.is_terminal;
   });
 
+  // Get department for a vehicle based on current pipeline stage
+  const getVehicleDepartment = (vehicleId: string): string => {
+    const status = getCurrentStatus(vehicleId);
+    const stage = stages.find(s => s.stage_name === status);
+    return stage?.role || 'Unknown';
+  };
+
+  // Get current assignee for a vehicle (from stage completions)
+  const getVehicleAssignee = (vehicleId: string): string | null => {
+    const vehicleCompletions = completions.filter(c => c.vehicle_id === vehicleId);
+    // Get the most recent completion with an assignee
+    const sortedCompletions = vehicleCompletions
+      .filter(c => c.completion_value && !c.cleared_at)
+      .sort((a, b) => new Date(b.completed_at || 0).getTime() - new Date(a.completed_at || 0).getTime());
+    return sortedCompletions[0]?.completed_by || null;
+  };
+
+  // Group vehicles by department for department view
+  const vehiclesByDepartment = departments.reduce((acc, dept) => {
+    acc[dept] = vehicles.filter(v => getVehicleDepartment(v.id) === dept);
+    return acc;
+  }, {} as Record<string, Vehicle[]>);
+
+  // Filter vehicles based on search and filters
+  const filterVehicles = (vehicleList: Vehicle[]): Vehicle[] => {
+    return vehicleList.filter(v => {
+      // Search filter
+      const searchLower = searchQuery.toLowerCase();
+      const matchesSearch = !searchQuery || 
+        v.year.toLowerCase().includes(searchLower) ||
+        v.make.toLowerCase().includes(searchLower) ||
+        v.model.toLowerCase().includes(searchLower) ||
+        v.stock_num?.toLowerCase().includes(searchLower) ||
+        v.vin?.toLowerCase().includes(searchLower);
+      
+      // Status filter (for overview mode)
+      const status = getCurrentStatus(v.id);
+      const isReady = stages.find(s => s.stage_name === status)?.is_terminal;
+      const matchesStatus = filterStatus === 'all' || 
+        (filterStatus === 'ready' && isReady) ||
+        (filterStatus === 'inprogress' && !isReady) ||
+        (filterStatus === 'aging' && getAge(v.in_system_date) > 7);
+      
+      // Department filter (for department mode)
+      const dept = getVehicleDepartment(v.id);
+      const matchesDept = filterDepartment === 'all' || dept === filterDepartment;
+      
+      return matchesSearch && matchesStatus && matchesDept;
+    });
+  };
+
+  // Apply filters
+  const filteredReadyCars = filterVehicles(readyCars);
+  const filteredInProgressCars = filterVehicles(inProgressCars);
+  const filteredVehiclesByDept = Object.fromEntries(
+    Object.entries(vehiclesByDepartment).map(([dept, vehs]) => [dept, filterVehicles(vehs)])
+  );
+
+  // Handle view toggle (only for managers)
+  const handleViewToggle = async (newView: 'overview' | 'department') => {
+    setDashboardView(newView);
+    if (user) {
+      try {
+        await supabase
+          .from('users')
+          .update({ dashboard_view: newView })
+          .eq('id', user.id);
+        
+        // Update local user state in localStorage
+        const updatedUser = { ...user, dashboard_view: newView };
+        localStorage.setItem('car_manager_user', JSON.stringify(updatedUser));
+        // Force re-render by updating window state
+        window.dispatchEvent(new Event('user-updated'));
+      } catch (error) {
+        console.error('Error updating dashboard view:', error);
+      }
+    }
+  };
+
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#0f172a', color: 'white', fontFamily: 'system-ui, sans-serif', paddingBottom: '80px' }}>
       
@@ -514,32 +616,156 @@ export default function Home() {
         <div style={{ fontSize: '12px', color: '#94a3b8', marginBottom: '12px' }}>
           Logged in as: <span style={{ color: '#22c55e', fontWeight: 600 }}>{user.name}</span> ({user.roles.join(', ')})
         </div>
-        
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '6px' }}>
-          <div style={{ backgroundColor: '#334155', padding: '8px', borderRadius: '8px', textAlign: 'center' }}>
-            <div style={{ fontSize: '18px', fontWeight: 'bold' }}>{vehicles.length}</div>
-            <div style={{ fontSize: '9px', color: '#94a3b8' }}>TOTAL</div>
+
+        {/* View Toggle for Managers */}
+        {user.roles.includes('Manager') && (
+          <div style={{ display: 'flex', gap: '6px', marginBottom: '12px' }}>
+            <button 
+              onClick={() => handleViewToggle('overview')}
+              style={{ 
+                flex: 1, 
+                padding: '8px 12px', 
+                borderRadius: '8px', 
+                border: 'none', 
+                fontSize: '12px', 
+                fontWeight: 600, 
+                cursor: 'pointer',
+                backgroundColor: dashboardView === 'overview' ? '#2563eb' : '#334155',
+                color: 'white'
+              }}
+            >
+              📊 Overview
+            </button>
+            <button 
+              onClick={() => handleViewToggle('department')}
+              style={{ 
+                flex: 1, 
+                padding: '8px 12px', 
+                borderRadius: '8px', 
+                border: 'none', 
+                fontSize: '12px', 
+                fontWeight: 600, 
+                cursor: 'pointer',
+                backgroundColor: dashboardView === 'department' ? '#8b5cf6' : '#334155',
+                color: 'white'
+              }}
+            >
+              🏢 Department
+            </button>
           </div>
-          <div style={{ backgroundColor: '#22c55e20', padding: '8px', borderRadius: '8px', textAlign: 'center' }}>
-            <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#22c55e' }}>{readyCars.length}</div>
-            <div style={{ fontSize: '9px', color: '#94a3b8' }}>READY</div>
-          </div>
-          <div style={{ backgroundColor: '#eab30820', padding: '8px', borderRadius: '8px', textAlign: 'center' }}>
-            <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#eab308' }}>{inProgressCars.length}</div>
-            <div style={{ fontSize: '9px', color: '#94a3b8' }}>IN PROG</div>
-          </div>
-          <div style={{ backgroundColor: '#ef444420', padding: '8px', borderRadius: '8px', textAlign: 'center' }}>
-            <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#ef4444' }}>{vehicles.filter(v => getAge(v.in_system_date) > 7).length}</div>
-            <div style={{ fontSize: '9px', color: '#94a3b8' }}>AGING</div>
+        )}
+
+        {/* Search & Filter Bar */}
+        <div style={{ marginBottom: '12px' }}>
+          <input 
+            type="text" 
+            placeholder="🔍 Search year, make, model, stock #, VIN..." 
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            style={{ 
+              width: '100%', 
+              backgroundColor: '#334155', 
+              border: 'none', 
+              borderRadius: '8px', 
+              padding: '10px 12px', 
+              color: 'white', 
+              fontSize: '13px',
+              marginBottom: '8px'
+            }} 
+          />
+          <div style={{ display: 'flex', gap: '6px' }}>
+            <select 
+              value={filterStatus} 
+              onChange={e => setFilterStatus(e.target.value)}
+              style={{ 
+                flex: 1, 
+                backgroundColor: '#334155', 
+                border: 'none', 
+                borderRadius: '6px', 
+                padding: '6px 8px', 
+                color: 'white', 
+                fontSize: '12px'
+              }}
+            >
+              <option value="all">All Status</option>
+              <option value="ready">Ready</option>
+              <option value="inprogress">In Progress</option>
+              <option value="aging">Aging</option>
+            </select>
+            {dashboardView === 'department' && (
+              <select 
+                value={filterDepartment} 
+                onChange={e => setFilterDepartment(e.target.value)}
+                style={{ 
+                  flex: 1, 
+                  backgroundColor: '#334155', 
+                  border: 'none', 
+                  borderRadius: '6px', 
+                  padding: '6px 8px', 
+                  color: 'white', 
+                  fontSize: '12px'
+                }}
+              >
+                <option value="all">All Depts</option>
+                {departments.map(dept => (
+                  <option key={dept} value={dept}>{dept}</option>
+                ))}
+              </select>
+            )}
           </div>
         </div>
+
+        {/* Stats based on view mode */}
+        {dashboardView === 'overview' ? (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '6px' }}>
+            <div style={{ backgroundColor: '#334155', padding: '8px', borderRadius: '8px', textAlign: 'center' }}>
+              <div style={{ fontSize: '18px', fontWeight: 'bold' }}>{vehicles.length}</div>
+              <div style={{ fontSize: '9px', color: '#94a3b8' }}>TOTAL</div>
+            </div>
+            <div style={{ backgroundColor: '#22c55e20', padding: '8px', borderRadius: '8px', textAlign: 'center' }}>
+              <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#22c55e' }}>{filteredReadyCars.length}</div>
+              <div style={{ fontSize: '9px', color: '#94a3b8' }}>READY</div>
+            </div>
+            <div style={{ backgroundColor: '#eab30820', padding: '8px', borderRadius: '8px', textAlign: 'center' }}>
+              <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#eab308' }}>{filteredInProgressCars.length}</div>
+              <div style={{ fontSize: '9px', color: '#94a3b8' }}>IN PROG</div>
+            </div>
+            <div style={{ backgroundColor: '#ef444420', padding: '8px', borderRadius: '8px', textAlign: 'center' }}>
+              <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#ef4444' }}>{vehicles.filter(v => getAge(v.in_system_date) > 7).length}</div>
+              <div style={{ fontSize: '9px', color: '#94a3b8' }}>AGING</div>
+            </div>
+          </div>
+        ) : (
+          // Department Focus Mode Stats
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '6px' }}>
+            <div style={{ backgroundColor: '#3b82f620', padding: '8px', borderRadius: '8px', textAlign: 'center' }}>
+              <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#3b82f6' }}>{filteredVehiclesByDept['Detail']?.length || 0}</div>
+              <div style={{ fontSize: '9px', color: '#94a3b8' }}>DETAIL</div>
+            </div>
+            <div style={{ backgroundColor: '#f9731620', padding: '8px', borderRadius: '8px', textAlign: 'center' }}>
+              <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#f97316' }}>{filteredVehiclesByDept['Service']?.length || 0}</div>
+              <div style={{ fontSize: '9px', color: '#94a3b8' }}>SERVICE</div>
+            </div>
+            <div style={{ backgroundColor: '#64748b20', padding: '8px', borderRadius: '8px', textAlign: 'center' }}>
+              <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#94a3b8' }}>{filteredVehiclesByDept['Manager']?.filter(v => !stages.find(s => s.stage_name === getCurrentStatus(v.id))?.is_terminal).length || 0}</div>
+              <div style={{ fontSize: '9px', color: '#94a3b8' }}>INVENTORY</div>
+            </div>
+            <div style={{ backgroundColor: '#22c55e20', padding: '8px', borderRadius: '8px', textAlign: 'center' }}>
+              <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#22c55e' }}>{readyCars.length}</div>
+              <div style={{ fontSize: '9px', color: '#94a3b8' }}>READY</div>
+            </div>
+          </div>
+        )}
       </header>
 
-      {readyCars.length > 0 && (
-        <div style={{ padding: '12px' }}>
-          <h2 style={{ fontSize: '14px', color: '#22c55e', marginBottom: '8px' }}>🚗 READY TO SELL ({readyCars.length})</h2>
-          <div style={{ display: 'grid', gap: '6px' }}>
-            {readyCars.map(v => {
+      {/* Content based on view mode */}
+      {dashboardView === 'overview' && (
+        <>
+          {filteredReadyCars.length > 0 && (
+            <div style={{ padding: '12px' }}>
+              <h2 style={{ fontSize: '14px', color: '#22c55e', marginBottom: '8px' }}>🚗 READY TO SELL ({filteredReadyCars.length})</h2>
+              <div style={{ display: 'grid', gap: '6px' }}>
+                {filteredReadyCars.map(v => {
               const status = getCurrentStatus(v.id);
               return (
                 <div key={v.id} onClick={() => { setSelectedVehicle(v); setShowActions(true); }} style={{ backgroundColor: '#22c55e20', border: '1px solid #22c55e40', padding: '12px', borderRadius: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }}>
@@ -558,9 +784,9 @@ export default function Home() {
       )}
 
       <div style={{ padding: '12px' }}>
-        <h2 style={{ fontSize: '14px', color: '#f59e0b', marginBottom: '8px' }}>🔄 IN PROGRESS ({inProgressCars.length})</h2>
+        <h2 style={{ fontSize: '14px', color: '#f59e0b', marginBottom: '8px' }}>🔄 IN PROGRESS ({filteredInProgressCars.length})</h2>
         <div style={{ display: 'grid', gap: '6px' }}>
-          {inProgressCars.map(v => {
+          {filteredInProgressCars.map(v => {
             const status = getCurrentStatus(v.id);
             const age = getAge(v.in_system_date);
             const stageColor = getStageColor(status);
@@ -579,6 +805,51 @@ export default function Home() {
           })}
         </div>
       </div>
+      </>
+      )}
+      
+      {/* Department View Mode - Grouped by Department */}
+      {dashboardView === 'department' && departments.map(dept => {
+        const deptVehicles = filteredVehiclesByDept[dept]?.filter(v => {
+          const status = getCurrentStatus(v.id);
+          return !stages.find(s => s.stage_name === status)?.is_terminal;
+        }) || [];
+        
+        if (deptVehicles.length === 0) return null;
+        
+        const deptColor = dept === 'Detail' ? '#3b82f6' : dept === 'Service' ? '#f97316' : '#64748b';
+        
+        return (
+          <div key={dept} style={{ padding: '12px' }}>
+            <h2 style={{ fontSize: '14px', color: deptColor, marginBottom: '8px' }}>
+              {dept === 'Detail' ? '🎨' : dept === 'Service' ? '🔧' : '📋'} {dept.toUpperCase()} ({deptVehicles.length})
+            </h2>
+            <div style={{ display: 'grid', gap: '6px' }}>
+              {deptVehicles.map(v => {
+                const status = getCurrentStatus(v.id);
+                const age = getAge(v.in_system_date);
+                const stageColor = getStageColor(status);
+                const assignee = getVehicleAssignee(v.id);
+                return (
+                  <div key={v.id} onClick={() => { setSelectedVehicle(v); setShowActions(true); }} style={{ backgroundColor: '#1e293b', borderLeft: `4px solid ${stageColor}`, padding: '12px', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: '600', fontSize: '15px' }}>{v.year} {v.make} {v.model}</div>
+                      <div style={{ fontSize: '11px', color: '#94a3b8' }}>#{v.stock_num} • VIN: {v.vin || 'N/A'}</div>
+                      {assignee && (
+                        <div style={{ fontSize: '10px', color: '#8b5cf6', marginTop: '2px' }}>👤 {assignee}</div>
+                      )}
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: '12px', color: stageColor, fontWeight: '600' }}>{status.split(' - ')[0]}</div>
+                      <div style={{ fontSize: '10px', color: age > 7 ? '#ef4444' : '#94a3b8' }}>{age}d</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
 
       {vehicles.length === 0 && (
         <div style={{ padding: '40px', textAlign: 'center', color: '#64748b' }}>

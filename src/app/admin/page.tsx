@@ -23,7 +23,7 @@ export default function AdminPage() {
   // User form state
   const [showUserForm, setShowUserForm] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
-  const [userForm, setUserForm] = useState({ name: '', pin: '', roles: [] as string[] });
+  const [userForm, setUserForm] = useState({ name: '', pin: '', roles: [] as string[], dashboard_view: 'overview' as 'overview' | 'department' });
   
   // Stage form state
   const [showStageForm, setShowStageForm] = useState(false);
@@ -77,7 +77,7 @@ export default function AdminPage() {
       if (editingUser) {
         const { error } = await supabase
           .from('users')
-          .update({ name: userForm.name, pin: userForm.pin, roles: userForm.roles })
+          .update({ name: userForm.name, pin: userForm.pin, roles: userForm.roles, dashboard_view: userForm.dashboard_view })
           .eq('id', editingUser.id);
         if (error) throw error;
       } else {
@@ -88,6 +88,7 @@ export default function AdminPage() {
             name: userForm.name,
             pin: userForm.pin,
             roles: userForm.roles,
+            dashboard_view: userForm.dashboard_view,
             active: true
           });
         if (error) throw error;
@@ -95,7 +96,7 @@ export default function AdminPage() {
       
       setShowUserForm(false);
       setEditingUser(null);
-      setUserForm({ name: '', pin: '', roles: [] });
+      setUserForm({ name: '', pin: '', roles: [], dashboard_view: 'overview' });
       fetchData();
     } catch (error) {
       console.error('Error saving user:', error);
@@ -119,10 +120,10 @@ export default function AdminPage() {
   function openUserForm(existingUser?: User) {
     if (existingUser) {
       setEditingUser(existingUser);
-      setUserForm({ name: existingUser.name, pin: existingUser.pin, roles: existingUser.roles });
+      setUserForm({ name: existingUser.name, pin: existingUser.pin, roles: existingUser.roles, dashboard_view: existingUser.dashboard_view || 'overview' });
     } else {
       setEditingUser(null);
-      setUserForm({ name: '', pin: '', roles: [] });
+      setUserForm({ name: '', pin: '', roles: [], dashboard_view: 'overview' });
     }
     setShowUserForm(true);
   }
@@ -296,6 +297,11 @@ export default function AdminPage() {
                   <div>
                     <div style={{ fontWeight: 600 }}>{u.name}</div>
                     <div style={{ fontSize: '12px', color: '#94a3b8' }}>PIN: {u.pin} • Roles: {u.roles.join(', ')}</div>
+                    {u.roles.includes('Manager') && (
+                      <div style={{ fontSize: '11px', color: u.dashboard_view === 'department' ? '#8b5cf6' : '#64748b', marginTop: '4px' }}>
+                        View: {u.dashboard_view === 'department' ? '🏢 Department' : '📊 Overview'}
+                      </div>
+                    )}
                   </div>
                   <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                     <span style={{ fontSize: '12px', color: u.active ? '#22c55e' : '#ef4444' }}>{u.active ? 'Active' : 'Inactive'}</span>
@@ -383,6 +389,44 @@ export default function AdminPage() {
                 ))}
               </div>
             </div>
+
+            {userForm.roles.includes('Manager') && (
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', fontSize: '12px', color: '#94a3b8', marginBottom: '8px' }}>Default Dashboard View</label>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button 
+                    onClick={() => setUserForm({...userForm, dashboard_view: 'overview'})}
+                    style={{ 
+                      flex: 1, 
+                      padding: '10px', 
+                      borderRadius: '8px', 
+                      border: 'none', 
+                      fontSize: '13px', 
+                      cursor: 'pointer',
+                      backgroundColor: userForm.dashboard_view === 'overview' ? '#2563eb' : '#334155',
+                      color: 'white'
+                    }}
+                  >
+                    📊 Overview
+                  </button>
+                  <button 
+                    onClick={() => setUserForm({...userForm, dashboard_view: 'department'})}
+                    style={{ 
+                      flex: 1, 
+                      padding: '10px', 
+                      borderRadius: '8px', 
+                      border: 'none', 
+                      fontSize: '13px', 
+                      cursor: 'pointer',
+                      backgroundColor: userForm.dashboard_view === 'department' ? '#8b5cf6' : '#334155',
+                      color: 'white'
+                    }}
+                  >
+                    🏢 Department
+                  </button>
+                </div>
+              </div>
+            )}
             
             <div style={{ display: 'flex', gap: '8px' }}>
               <button onClick={() => setShowUserForm(false)} style={{ flex: 1, backgroundColor: '#475569', color: 'white', padding: '12px', borderRadius: '8px', border: 'none', fontSize: '14px', cursor: 'pointer' }}>Cancel</button>
